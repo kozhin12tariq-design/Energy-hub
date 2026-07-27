@@ -1,6 +1,7 @@
-%MAIN_IEEE33_HUB Integrate the Energy Hub model as active nodes within the
-%standard IEEE 33-bus distribution test system, and evaluate power flow
-%interactions.
+%MAIN_MONTH2B_IEEE33_GRID_INTEGRATION
+%Thesis roadmap Month 2, item III: integrate the Energy Hub model as
+%active nodes within the standard IEEE 33-bus distribution test system,
+%and evaluate power flow interactions.
 %
 %   Two parts:
 %     1) Validate the backward-forward-sweep power flow solver
@@ -8,19 +9,22 @@
 %        for this exact test system (min voltage ~0.9131 pu at bus 18,
 %        total losses ~202.7 kW) -- so the "before" picture is trustworthy.
 %     2) Site energy hubs (built with the same component/graph machinery
-%        as main_energy_hub.m) at three buses, replacing each bus's fixed
-%        nominal load with the hub's actual net grid draw (P_grid) --
-%        one favorable scenario (solar-rich midday, hub mostly
-%        self-supplies its local demand), one on the largest load bus in
-%        the system, and one adverse scenario (evening peak, no solar,
-%        EV charging adds demand) so the comparison is honest, not just
-%        the flattering case. Re-run the power flow and report the
+%        as Month 1) at three buses, replacing each bus's fixed nominal
+%        load with the hub's actual net grid draw (P_grid) -- one
+%        favorable scenario (solar-rich midday, hub mostly self-supplies
+%        its local demand), one on the largest load bus in the system,
+%        and one adverse scenario (evening peak, no solar, EV charging
+%        adds demand) so the comparison is honest, not just the
+%        flattering case. Re-run the power flow and report the
 %        voltage-profile and loss impact.
 %
-%   Run with:  main_ieee33_hub
+%   Depends on Month 1's component/graph engine (../month1_component_graph_models).
+%
+%   Run with:  main_month2b_ieee33_grid_integration
 
 clear; clc;
-addpath('components');
+addpath('../month1_component_graph_models');
+addpath('../month1_component_graph_models/components');
 
 %% 1) Base case + validation --------------------------------------------
 fprintf('=====================================================\n');
@@ -131,7 +135,7 @@ for b = reportBuses
     fprintf('%6d %10.4f %10.4f %+10.4f\n', b, Vmag_base(b), Vmag_hub(b), Vmag_hub(b)-Vmag_base(b));
 end
 
-%% 4) Plot voltage profile comparison --------------------------------------
+%% 5) Plot voltage profile comparison --------------------------------------
 try
     figure('Position', [100 100 900 500]);
     plot(1:33, Vmag_base, '-o', 'LineWidth', 1.5, 'DisplayName', 'Base case (no hubs)'); hold on;

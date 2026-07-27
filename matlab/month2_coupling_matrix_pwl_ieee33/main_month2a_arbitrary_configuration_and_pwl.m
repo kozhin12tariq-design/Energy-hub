@@ -1,5 +1,7 @@
-%MAIN_PWL_HUB Standardized coupling matrix for arbitrary configurations +
-%piecewise-linearized (PWL) variable efficiencies.
+%MAIN_MONTH2A_ARBITRARY_CONFIGURATION_AND_PWL
+%Thesis roadmap Month 2, items I-II: standardized coupling matrix for
+%arbitrary configurations + piecewise-linearized (PWL) variable
+%efficiencies.
 %
 %   This script covers exactly two modeling steps:
 %     1) Automatic generation of energy-flow equations for an ARBITRARY
@@ -15,10 +17,13 @@
 %        curve far more closely. Quantified below for the Fuel Cell, PV,
 %        and Electrolyzer, then wired into the full hub graph.
 %
-%   Run with:  main_pwl_hub
+%   Depends on Month 1's component/graph engine (../month1_component_graph_models).
+%
+%   Run with:  main_month2a_arbitrary_configuration_and_pwl
 
 clear; clc;
-addpath('components');
+addpath('../month1_component_graph_models');
+addpath('../month1_component_graph_models/components');
 
 p = energy_hub_default_params();
 
@@ -58,7 +63,7 @@ fprintf('\n%-38s %10s %10s %10s %8s\n', 'Component branch', 'MaxErr', 'MaxErr', 
 fprintf('%-38s %10s %10s %10s %8s\n', '', 'const[kW]', 'PWL[kW]', 'const', 'PWL');
 for i = 1:numel(curves)
     cv = curves{i};
-    bkpt = pwl_fit_from_function(cv.func, cv.Pmax, nSeg, cv.name);
+    bkpt = pwl_utils('fit', cv.func, cv.Pmax, nSeg, cv.name);
     pwlOf.(cv.name) = bkpt;
 
     u_test = linspace(0.02, 1, 400);
@@ -66,7 +71,7 @@ for i = 1:numel(curves)
     y_true = cv.func(u_test) .* x_test;
     eta_const = cv.func(1.0);
     y_const = eta_const * x_test;
-    y_pwl = pwl_evaluate(bkpt.x, bkpt.y, x_test);
+    y_pwl = pwl_utils('eval', bkpt.x, bkpt.y, x_test);
 
     errConst = abs(y_true - y_const);
     errPwl = abs(y_true - y_pwl);
@@ -84,8 +89,8 @@ fprintf('\n=====================================================\n');
 fprintf(' Hub configuration 1: PV1 + FC1 (PWL) + Batt1 + EV1\n');
 fprintf('=====================================================\n');
 
-pv1_pwl = component_pv('PV1', pwlOf.('PV1'));
-fc1_pwl = component_fuelcell('FC1', pwlOf.('FC1_elec'), pwlOf.('FC1_heat'));
+pv1_pwl = hub_component('pv', 'PV1', pwlOf.('PV1'));
+fc1_pwl = hub_component('fuelcell', 'FC1', pwlOf.('FC1_elec'), pwlOf.('FC1_heat'));
 
 v_elec = [0.70, 0.20, 0.10];
 v_heat = 1.0;
@@ -155,12 +160,12 @@ fprintf('=====================================================\n');
 
 pv2_curve = pwlOf.('PV1');
 pv2_curve.name = 'PV2'; % same fitted curve shape, but its own label in printed equations
-pv2_pwl = component_pv('PV2', pv2_curve);
+pv2_pwl = hub_component('pv', 'PV2', pv2_curve);
 
 % Electrolyzer is the sole consumer on Elec_Bus in this configuration
 % (all PV output is routed to Power-to-Gas), so its dispatch share = 1,
 % exactly like the single-load Heat_Bus case in hub configuration 1.
-ely1_pwl = component_electrolyzer('ELY1', 1.0, pwlOf.('ELY1'));
+ely1_pwl = hub_component('electrolyzer', 'ELY1', 1.0, pwlOf.('ELY1'));
 
 components2 = {pv1_pwl, pv2_pwl, ely1_pwl};
 

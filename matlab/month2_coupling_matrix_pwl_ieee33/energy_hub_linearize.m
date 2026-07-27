@@ -11,7 +11,7 @@ function [C_local, d_local, f0, A] = energy_hub_linearize(edges, nNodes, nInputs
 %   segment it occupies at P0). Constant-Eta edges contribute their
 %   usual linear term with d = 0; each PWL edge is replaced by the local
 %   (slope, intercept) of its active segment at P0, found with
-%   pwl_local_affine.m.
+%   pwl_utils.m 'local_affine'.
 %
 %   At P = P0 exactly, C_local*P0 + d_local reproduces
 %   energy_hub_evaluate_hub.m's f0 exactly (both describe the same
@@ -50,7 +50,7 @@ function [C_local, d_local, f0, A] = energy_hub_linearize(edges, nNodes, nInputs
                     M(k, inflowEdges) = M(k, inflowEdges) - edges(k).Eta;
                 else
                     x0 = sum(f0(inflowEdges));
-                    [slope, intercept] = pwl_local_affine(edges(k).Eta.x, edges(k).Eta.y, x0);
+                    [slope, intercept] = pwl_utils('local_affine', edges(k).Eta.x, edges(k).Eta.y, x0);
                     M(k, inflowEdges) = M(k, inflowEdges) - slope;
                     b(k) = intercept;
                 end

@@ -1,10 +1,11 @@
-%MAIN_ENERGY_HUB Fuel Cell + PV + Battery + EV energy hub: component models
-%and graph-theoretic (incidence-matrix) hub assembly.
+%MAIN_MONTH1_COMPONENTS_AND_GRAPH_THEORY
+%Thesis roadmap Month 1: component models + graph theory.
 %
-%   This script covers exactly two modeling steps:
+%   Covers exactly the two Month-1 engineering deliverables:
 %     1) Individual component models (PV, Fuel Cell, Battery, EV) built
 %        with the incidence-and-coupling-matrix approach, each shown
-%        standalone with its own local incidence matrix.
+%        standalone with its own local incidence matrix
+%        (hub_component.m, components/hub_component.m).
 %     2) A graph-theory hub assembly (energy_hub_assemble.m) that wires
 %        the components onto shared carrier buses (electricity, heat)
 %        and derives the hub's global coupling matrix from the global
@@ -13,7 +14,7 @@
 %        conversion (the fuel cell's single hydrogen input drives both
 %        an electrical and a thermal output simultaneously).
 %
-%   Run with:  main_energy_hub
+%   Run with:  main_month1_components_and_graph_theory
 
 clear; clc;
 addpath('components');
@@ -29,10 +30,10 @@ fprintf(' STEP 1: Individual component models (incidence matrix)\n');
 fprintf('=====================================================\n');
 
 v_elec_probe = [1 0 0]; % placeholder dispatch factors, only used for standalone display
-comp_pv_demo    = component_pv('PV1', p.eta_PV);
-comp_fc_demo    = component_fuelcell('FC1', p.eta_FC_e, p.eta_FC_th);
-comp_batt_demo  = component_battery('Batt1', v_elec_probe(2));
-comp_ev_demo    = component_ev('EV1', v_elec_probe(3), true, true);
+comp_pv_demo    = hub_component('pv', 'PV1', p.eta_PV);
+comp_fc_demo    = hub_component('fuelcell', 'FC1', p.eta_FC_e, p.eta_FC_th);
+comp_batt_demo  = hub_component('battery', 'Batt1', v_elec_probe(2));
+comp_ev_demo    = hub_component('ev', 'EV1', v_elec_probe(3), true, true);
 
 energy_hub_display_component(comp_pv_demo);
 energy_hub_display_component(comp_fc_demo);
@@ -96,11 +97,11 @@ fprintf('  dL_heat/dP_H2_FC1 = %.4f (= v_heat1 * eta_FC_th = %.2f * %.2f)\n', ..
 % stops a caller from setting a nonzero charge dispatch AND a nonzero
 % discharge input for the same device at once. Forbidding that
 % (charge/discharge complementarity) is an operating CONSTRAINT that
-% belongs to the optimizer that chooses v and P at each timestep (a later
-% stage, e.g. the Month-3 multi-timescale dispatch), not to the graph
-% model itself. The two points below are each built with a physically
-% consistent dispatch (a device's own charge share is zero whenever it is
-% the one discharging) to keep the illustration clean.
+% belongs to the optimizer that chooses v and P at each timestep (Month
+% 3's multi-timescale dispatch), not to the graph model itself. The two
+% points below are each built with a physically consistent dispatch (a
+% device's own charge share is zero whenever it is the one discharging)
+% to keep the illustration clean.
 
 fprintf('\n--- Operating point A: Battery discharging, EV charging ---\n');
 v_elec_A = [0.70, 0.00, 0.30];   % Batt1 charge share = 0 (it is discharging)
@@ -114,8 +115,8 @@ P_A(strcmp(inputLabels_A,'P_solar_PV1')) = 2.0;
 P_A(strcmp(inputLabels_A,'P_Batt1_dis')) = 1.5;
 P_A(strcmp(inputLabels_A,'P_EV1_dis'))   = 0.0;
 L_A = C_A * P_A;
-print_labeled_vector('P', P_A, inputLabels_A);
-print_labeled_vector('L', L_A, outputLabels_A);
+print_labeled_matrix(P_A, inputLabels_A, {'P'});
+print_labeled_matrix(L_A, outputLabels_A, {'L'});
 
 fprintf('\n--- Operating point B: Battery charging (PV surplus), EV discharging (V2G) ---\n');
 v_elec_B = [0.50, 0.50, 0.00];   % EV1 charge share = 0 (it is discharging); sums to 1
@@ -129,8 +130,8 @@ P_B(strcmp(inputLabels_B,'P_solar_PV1')) = 6.0;
 P_B(strcmp(inputLabels_B,'P_Batt1_dis')) = 0.0;
 P_B(strcmp(inputLabels_B,'P_EV1_dis'))   = 1.0;
 L_B = C_B * P_B;
-print_labeled_vector('P', P_B, inputLabels_B);
-print_labeled_vector('L', L_B, outputLabels_B);
+print_labeled_matrix(P_B, inputLabels_B, {'P'});
+print_labeled_matrix(L_B, outputLabels_B, {'L'});
 
 fprintf('\n(Battery: discharging in A (P_Batt1_dis=%.2f, P_Batt1_ch=%.2f) vs.\n', ...
     P_A(strcmp(inputLabels_A,'P_Batt1_dis')), L_A(strcmp(outputLabels_A,'P_Batt1_ch')));
@@ -139,7 +140,7 @@ fprintf(' charging in B (P_Batt1_dis=%.2f, P_Batt1_ch=%.2f). EV: charging in A\n
 fprintf(' (P_EV1_ch=%.2f) vs. V2G discharging in B (P_EV1_dis=%.2f). Both\n', ...
     L_A(strcmp(outputLabels_A,'P_EV1_ch')), P_B(strcmp(inputLabels_B,'P_EV1_dis')));
 fprintf(' directions are carried by two independent edges per device (see\n');
-fprintf(' component_battery.m / component_ev.m), not by a signed variable.)\n');
+fprintf(' hub_component.m, cases ''battery''/''ev''), not by a signed variable.)\n');
 
 %% 5) Energy-balance validation (per carrier, both operating points) -----
 for lbl = {'A','B'}

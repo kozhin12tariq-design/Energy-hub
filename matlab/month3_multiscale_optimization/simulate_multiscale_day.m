@@ -34,6 +34,9 @@ function res = simulate_multiscale_day(p, fc, opts)
 %     SOCbatt5            : 288x1 battery SOC trajectory
 %     ID_SOC (Batt/EV/Building/Pipe, 96x1 for closed loop; interpolated
 %             day-ahead trajectory for open loop) and their bound checks
+%     ID_Pg_imp, ID_Pg_exp : 96x1 intraday-COMMITTED grid interchange (the
+%             15-min "plan" real-time then corrects against) -- for open
+%             loop this is the day-ahead hourly value repeated per slot
 %     plannedCost, actualCost : $ over the day
 %     emissions_kgCO2     : total CO2 (net grid import*gridFactor + H2*H2Factor)
 %     dayaheadPeakImport  : max(DA.Pg_imp), used as the reliability capacity reference
@@ -87,6 +90,7 @@ function res = simulate_closed_loop(p, fc, DA)
     Pg_imp5 = zeros(288,1); Pg_exp5 = zeros(288,1); PH2_5 = zeros(288,1);
     SOCbatt5 = zeros(288,1);
     ID_SOC = struct('Batt',zeros(96,1),'EV',zeros(96,1),'Building',zeros(96,1),'Pipe',zeros(96,1));
+    ID_Pg_imp = zeros(96,1); ID_Pg_exp = zeros(96,1); ID_PH2 = zeros(96,1);
     RT_imbalance = zeros(288,1);
 
     for k = 1:96
@@ -116,6 +120,7 @@ function res = simulate_closed_loop(p, fc, DA)
 
         ID_SOC.Batt(k) = SOCafterID.Batt; ID_SOC.EV(k) = SOCafterID.EV;
         ID_SOC.Building(k) = SOCafterID.Building; ID_SOC.Pipe(k) = SOCafterID.Pipe;
+        ID_Pg_imp(k) = committed.Pg_imp; ID_Pg_exp(k) = committed.Pg_exp; ID_PH2(k) = committed.PH2;
 
         SOCbatt5loop = SOCstate.Batt;
         for j = 1:3
@@ -137,6 +142,7 @@ function res = simulate_closed_loop(p, fc, DA)
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;
+    res.ID_Pg_imp = ID_Pg_imp; res.ID_Pg_exp = ID_Pg_exp; res.ID_PH2 = ID_PH2;
     res.RT_imbalance = RT_imbalance;
     res.mode = 'closed_loop';
 end
@@ -160,10 +166,10 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
         Pg_imp5(m) = max(Pnet, 0);
         Pg_exp5(m) = max(-Pnet, 0);
 
-        SOC.Batt = generalized_storage_soc_update(SOC.Batt, DA.Pbatt_ch(h), DA.Pbatt_dis(h), p.Batt, dt);
-        SOC.EV   = generalized_storage_soc_update(SOC.EV,   DA.Pev_ch(h),   DA.Pev_dis(h),   p.EV, dt);
-        SOC.Building = generalized_storage_soc_update(SOC.Building, DA.Pbld_ch(h), DA.Pbld_dis(h), p.Building, dt);
-        SOC.Pipe = generalized_storage_soc_update(SOC.Pipe, DA.Ppipe_ch(h), DA.Ppipe_dis(h), p.Pipe, dt);
+        SOC.Batt = storage_soc_update(SOC.Batt, DA.Pbatt_ch(h), DA.Pbatt_dis(h), p.Batt, dt);
+        SOC.EV   = storage_soc_update(SOC.EV,   DA.Pev_ch(h),   DA.Pev_dis(h),   p.EV, dt);
+        SOC.Building = storage_soc_update(SOC.Building, DA.Pbld_ch(h), DA.Pbld_dis(h), p.Building, dt);
+        SOC.Pipe = storage_soc_update(SOC.Pipe, DA.Ppipe_ch(h), DA.Ppipe_dis(h), p.Pipe, dt);
         SOCbatt5(m) = SOC.Batt;
         if mod(m,3) == 0
             k = m/3;
@@ -175,6 +181,8 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;
+    res.ID_Pg_imp = DA.Pg_imp(hourOf5(3:3:288)); res.ID_Pg_exp = DA.Pg_exp(hourOf5(3:3:288)); % day-ahead value held fixed, no separate intraday plan exists
+    res.ID_PH2 = DA.PH2(hourOf5(3:3:288));
     res.RT_imbalance = zeros(288,1); % no correction layer exists in open loop
     res.mode = 'open_loop';
 end

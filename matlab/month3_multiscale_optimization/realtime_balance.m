@@ -107,5 +107,5 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
 
     info.imbalanceCorrected_kW = (actual.Pg_imp - actual.Pg_exp) - (reference.Pg_imp - reference.Pg_exp);
 
-    SOCbattNext = generalized_storage_soc_update(SOCbattNow, actual.Pbatt_ch, actual.Pbatt_dis, p.Batt, dt);
+    SOCbattNext = storage_soc_update(SOCbattNow, actual.Pbatt_ch, actual.Pbatt_dis, p.Batt, dt);
 end

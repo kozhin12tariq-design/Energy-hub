@@ -1,5 +1,6 @@
-%MAIN_CASE_STUDIES Case studies quantifying cost, emissions, and
-%reliability improvements from the energy hub / multi-timescale approach.
+%MAIN_MONTH4A_CASE_STUDIES
+%Thesis roadmap Month 4, item I: case studies quantifying cost, emissions,
+%and reliability improvements from the energy hub / multi-timescale approach.
 %
 %   Four cases, each isolating one specific modeling contribution from
 %   the rest of this project, so the improvement from each can be
@@ -32,9 +33,12 @@
 %   higher peak import is reported as its own finding: the energy hub
 %   materially reduces how large a grid connection is needed at all.
 %
-%   Run with:  main_case_studies
+%   Depends on Month 3's dispatch stack (../month3_multiscale_optimization).
+%
+%   Run with:  main_month4a_case_studies
 
 clear; clc;
+addpath('../month3_multiscale_optimization');
 
 p = multiscale_default_params();
 fc = forecast_profiles(42);

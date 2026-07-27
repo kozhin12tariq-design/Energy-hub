@@ -6,7 +6,7 @@ function sol = dayahead_dispatch(p, fc)
 %   Solves ONE linear program over the 24 hourly slots of `fc.DA`,
 %   minimizing energy cost (grid import - export revenue + fuel) subject
 %   to electrical/heat balance, the generalized-storage state equation
-%   for all four devices (see generalized_storage_soc_update.m), and a
+%   for all four devices (see storage_soc_update.m), and a
 %   RESERVE-MARGIN robustness proxy: at every hour, storage must keep
 %   enough UNUSED charge/discharge headroom to cover a fraction of that
 %   hour's load/solar forecast (p.reserve.*), so the schedule isn't

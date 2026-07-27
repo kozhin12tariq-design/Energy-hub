@@ -11,7 +11,7 @@ function p = multiscale_default_params()
 %   storage flexibility are meaningfully visible.
 %
 %   GENERALIZED STORAGE: four devices share one mathematical model
-%   (see generalized_storage_soc_update.m):
+%   (see storage_soc_update.m):
 %       SOC(t) = SOC(t-1) + [eta_ch*Pch(t) - Pdis(t)/eta_dis]*dt/Emax
 %                          - selfLoss*SOC(t-1)*dt
 %   with 0 <= SOC <= 1 (SOCmin/SOCmax further restrict the usable band)

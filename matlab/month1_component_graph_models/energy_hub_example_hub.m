@@ -3,22 +3,23 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
 %ENERGY_HUB_EXAMPLE_HUB Build the PV1+FC1+Batt1+EV1 example hub for a given
 %dispatch operating point (v_elec, v_heat).
 %
-%   Factored out of main_energy_hub.m so different operating points (e.g.
-%   "battery discharging" vs. "battery charging") can each assemble their
-%   own consistent hub without duplicating the component/edge wiring.
+%   Factored out so different operating points (e.g. "battery
+%   discharging" vs. "battery charging") can each assemble their own
+%   consistent hub without duplicating the component/edge wiring.
 %
 %   pvComponent, fcComponent (optional) let a caller substitute PWL-fitted
-%   PV/Fuel-Cell components (see main_pwl_hub.m) instead of the default
-%   constant-efficiency ones built from `p`; leave empty to use defaults.
+%   PV/Fuel-Cell components (see main_month2a_arbitrary_configuration_and_pwl.m)
+%   instead of the default constant-efficiency ones built from `p`; leave
+%   empty to use defaults.
 
     if nargin < 4 || isempty(ev_plugged_in)
         ev_plugged_in = true;
     end
     if nargin < 5 || isempty(pvComponent)
-        pvComponent = component_pv('PV1', p.eta_PV);
+        pvComponent = hub_component('pv', 'PV1', p.eta_PV);
     end
     if nargin < 6 || isempty(fcComponent)
-        fcComponent = component_fuelcell('FC1', p.eta_FC_e, p.eta_FC_th);
+        fcComponent = hub_component('fuelcell', 'FC1', p.eta_FC_e, p.eta_FC_th);
     end
 
     if abs(sum(v_elec) - 1) > 1e-9
@@ -33,8 +34,8 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
     components = { ...
         pvComponent, ...
         fcComponent, ...
-        component_battery('Batt1', v_elec(2)), ...
-        component_ev('EV1', v_elec(3), ev_plugged_in, true) ...
+        hub_component('battery', 'Batt1', v_elec(2)), ...
+        hub_component('ev', 'EV1', v_elec(3), ev_plugged_in, true) ...
     };
 
     extraEdges = { ...

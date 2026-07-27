@@ -8,13 +8,13 @@ function [f, A] = energy_hub_evaluate_hub(edges, nNodes, nInputs, P)
 %   energy_hub_coupling_matrix.m builds ONE matrix C valid for the whole
 %   input space, which requires every dependent edge to be linear
 %   (constant Eta). PWL edges (eh_edge.m Eta = struct from
-%   pwl_fit_from_function.m) make that impossible in general, so this
-%   function instead evaluates the graph exactly at one concrete P by
-%   resolving edges in dependency order: 'input' edges are known
-%   immediately from P; a 'dependent' edge is resolved as soon as every
-%   edge feeding its tail node (read off the incidence matrix, exactly
-%   as in energy_hub_coupling_matrix.m) is itself resolved, applying
-%   either f = Eta*inflow (constant) or f = pwl_evaluate(Eta.x,Eta.y,inflow)
+%   pwl_utils.m 'fit') make that impossible in general, so this function
+%   instead evaluates the graph exactly at one concrete P by resolving
+%   edges in dependency order: 'input' edges are known immediately from
+%   P; a 'dependent' edge is resolved as soon as every edge feeding its
+%   tail node (read off the incidence matrix, exactly as in
+%   energy_hub_coupling_matrix.m) is itself resolved, applying either
+%   f = Eta*inflow (constant) or f = pwl_utils('eval',Eta.x,Eta.y,inflow)
 %   (PWL). This works for any hub whose edges have no circular value
 %   dependency (true of every physical hub graph assembled by
 %   energy_hub_assemble.m: sources -> converters -> buses -> storage/
@@ -61,7 +61,7 @@ function [f, A] = energy_hub_evaluate_hub(edges, nNodes, nInputs, P)
             if isnumeric(edges(k).Eta)
                 f(k) = edges(k).Eta * inflowVal;
             elseif isstruct(edges(k).Eta) && strcmp(edges(k).Eta.type, 'pwl')
-                f(k) = pwl_evaluate(edges(k).Eta.x, edges(k).Eta.y, inflowVal);
+                f(k) = pwl_utils('eval', edges(k).Eta.x, edges(k).Eta.y, inflowVal);
             else
                 error('energy_hub_evaluate_hub:eta', ...
                     'Edge %d has an unsupported Eta value.', k);

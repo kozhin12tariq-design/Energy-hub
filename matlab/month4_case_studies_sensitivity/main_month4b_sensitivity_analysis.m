@@ -1,5 +1,6 @@
-%MAIN_SENSITIVITY_ANALYSIS Sensitivity of cost/reliability to the robust
-%reserve-margin parameter and to renewable/load forecast uncertainty.
+%MAIN_MONTH4B_SENSITIVITY_ANALYSIS
+%Thesis roadmap Month 4, item II: sensitivity of cost/reliability to the
+%robust reserve-margin parameter and to renewable/load forecast uncertainty.
 %
 %   Two headline sweeps (each averaged over multiple random-scenario
 %   seeds, so the result isn't one lucky/unlucky noise draw), plus a
@@ -25,9 +26,12 @@
 %   representing a real feeder connection sized once, not re-sized for
 %   each parameter combination.
 %
-%   Run with:  main_sensitivity_analysis
+%   Depends on Month 3's dispatch stack (../month3_multiscale_optimization).
+%
+%   Run with:  main_month4b_sensitivity_analysis
 
 clear; clc;
+addpath('../month3_multiscale_optimization');
 
 p = multiscale_default_params();
 nSeeds = 3;

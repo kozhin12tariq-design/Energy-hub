@@ -1,7 +1,7 @@
-function SOC_next = generalized_storage_soc_update(SOC, Pch, Pdis, dev, dt)
-%GENERALIZED_STORAGE_SOC_UPDATE One step of the shared storage state equation.
+function SOC_next = storage_soc_update(SOC, Pch, Pdis, dev, dt)
+%STORAGE_SOC_UPDATE One step of the shared generalized-storage state equation.
 %
-%   SOC_next = GENERALIZED_STORAGE_SOC_UPDATE(SOC, Pch, Pdis, dev, dt)
+%   SOC_next = STORAGE_SOC_UPDATE(SOC, Pch, Pdis, dev, dt)
 %
 %   The single state equation used for every storage-like device in this
 %   chapter (battery, EV, building thermal mass, pipe storage -- see
