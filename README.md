@@ -26,8 +26,16 @@ Four modeling steps, matching the thesis roadmap's Month-1 and Month-2
    IEEE 33-bus radial feeder, and a backward-forward-sweep power flow
    solver evaluates the resulting voltage-profile and loss impact —
    including a deliberately adverse scenario, not only a flattering one.
+6. **Multi-time-space scale optimization**: three coordinated LP dispatch
+   levels (day-ahead hourly/robust-proxy, intraday 15-min rolling
+   two-stage-stochastic, real-time 5-min fast balancing) with
+   **generalized storage** — battery, EV fleet, building thermal mass,
+   and district-heating pipe storage all sharing one state equation —
+   threaded through a full simulated day via genuine LP/MILP solves
+   (GLPK), not heuristics.
 
-Tested with Octave 8.4 (headless via `xvfb-run`); no toolboxes required.
+Tested with Octave 8.4 (headless via `xvfb-run`); no toolboxes required
+beyond core Octave's built-in `glpk` (LP/MILP solver, used by chapter 6).
 
 ## Modeling approach
 
@@ -115,6 +123,74 @@ trunk-voltage benefit it ends up riding on when all three hubs run
 together — a genuine emergent finding from shared-trunk network coupling,
 not a scripted result.
 
+## Multi-time-space scale optimization
+
+Three genuine linear programs (solved with Octave's built-in `glpk`, not
+heuristics), coordinated so each level starts from where the previous
+one actually left the system:
+
+- **Day-ahead** (`dayahead_dispatch.m`, hourly, 24-step horizon, solved
+  once): minimizes 24h energy cost (grid import/export + fuel) subject
+  to electrical/heat balance and the generalized-storage state equation
+  for all four devices. **Robustness** is a reserve-margin proxy — the
+  standard simplification when a full robust-MILP toolchain (e.g.
+  YALMIP's `robustify` + Gurobi, as the roadmap specifies) isn't
+  available: instead of optimizing against an adversarial uncertainty
+  set, every hour must keep enough *unused* storage charge/discharge
+  headroom to cover a fraction of that hour's load/solar forecast
+  (`p.reserve.*`), so the plan isn't dispatched to the exact edge of what
+  the day-ahead forecast alone would justify.
+- **Intraday** (`intraday_dispatch.m`, 15-min, rolling horizon): a
+  genuine **two-stage stochastic LP** re-solved every slot — stage 1 is
+  the shared "here-and-now" decision for the current slot, stage 2 is a
+  3-scenario (low/mid/high solar) recourse decision for the *next* slot,
+  branching from the same stage-1 storage state (true non-anticipativity,
+  not an expected-value deterministic proxy). Only stage 1 is ever
+  committed; each new slot re-solves with updated forecasts, classic
+  receding-horizon dispatch. A soft (L1, via slack variables) penalty
+  keeps its storage trajectory close to the day-ahead plan — interpolated
+  to 15-min resolution — without forcing an exact match.
+- **Real-time** (`realtime_balance.m`, 5-min, fast): re-dispatches only
+  the **electrical** carrier, and only the fastest-responding resources
+  (grid interchange and the battery), against actual realized solar/load
+  — matching real grid-operator practice, where sub-minute balancing
+  draws on batteries and AGC-capable plant, not slow thermal assets. The
+  fuel cell, heat pump, EV charging, and both thermal storages stay at
+  intraday's committed setpoint; any heat-side mismatch is physically
+  absorbed by the buildings'/pipes' own thermal inertia rather than
+  needing an explicit fast correction, since thermal systems don't need
+  sub-minute balancing the way electricity does.
+
+**Generalized storage** (`generalized_storage_soc_update.m`): one state
+equation, `SOC(t) = SOC(t-1) + [eta_ch*Pch - Pdis/eta_dis]*dt/Emax -
+selfLoss*SOC(t-1)*dt`, used for all four devices via
+`multiscale_default_params.m`'s physical reinterpretation:
+  - **Battery / EV fleet**: the literal case (EV additionally masked by a
+    plugged-in-hours availability schedule).
+  - **Building thermal mass**: SOC 0↔1 maps to indoor temperature across
+    the comfort band [Tmin,Tmax]; `Emax = C_th*(Tmax-Tmin)`; charging =
+    heating beyond the minimum requirement (banking heat), self-loss =
+    passive heat loss to ambient. A deliberately short thermal time
+    constant (~7h) means it mostly can't hold charge from midday to
+    evening peak — visible in the results as much shallower cycling than
+    the other three devices, a physically realistic distinction, not an
+    underused/broken component.
+  - **District-heating pipe storage**: the same equations, larger
+    capacity, slower power limits, better insulated (smaller self-loss)
+    — it *can* hold charge across the day, and the optimizer uses it for
+    exactly that (charges through midday solar, discharges through
+    evening peak).
+
+`main_multiscale_dispatch.m` runs one simulated day end-to-end (1
+day-ahead solve + 96 intraday solves + 288 real-time solves, ~2.5s
+total), threading the storage state through all three levels, and plots
+the grid interchange at all three resolutions overlaid, all four
+devices' SOC trajectories, and the real-time correction magnitude over
+the day. Also fixed along the way: the real-time LP originally bounded
+battery charge/discharge only by power rating, not by the resulting SOC
+staying in bounds, and briefly pushed SOC just past its floor — now
+constrained explicitly.
+
 ## Files
 
 | File | Purpose |
@@ -143,17 +219,25 @@ not a scripted result.
 | `matlab/print_labeled_matrix.m`, `matlab/print_labeled_vector.m` | Console-printing helpers |
 | `matlab/ieee33_data.m` | Standard IEEE 33-bus radial distribution test system data (branches, loads, base voltage) |
 | `matlab/distflow_bfs.m` | Backward-forward sweep power flow solver for radial feeders |
+| `matlab/multiscale_default_params.m` | Community-scale params for ch. 6: generalized storage (Battery/EV/Building/Pipe), heat pump, economics, reserve fractions |
+| `matlab/generalized_storage_soc_update.m` | The one state equation shared by all four storage devices |
+| `matlab/forecast_profiles.m` | Day-ahead (smooth)/intraday (15-min, updated)/real-time (5-min, "true") forecast hierarchy with decreasing uncertainty |
+| `matlab/dayahead_dispatch.m` | Day-ahead LP: 24h horizon, reserve-margin robustness proxy |
+| `matlab/intraday_dispatch.m` | Intraday rolling two-stage stochastic LP: 15-min, 3-scenario recourse, day-ahead tracking |
+| `matlab/realtime_balance.m` | Real-time fast balancing LP: 5-min, electrical-only, battery + grid |
 | `matlab/main_energy_hub.m` | Component models + graph assembly demo (constant efficiencies) |
 | `matlab/main_pwl_hub.m` | Automatic-equation-generation + PWL demo |
 | `matlab/main_ieee33_hub.m` | Energy hubs as active nodes in the IEEE 33-bus system + power-flow impact |
+| `matlab/main_multiscale_dispatch.m` | Runs all three dispatch levels + generalized storage over one simulated day |
 
 ## Running
 
 ```matlab
 cd matlab
-main_energy_hub   % component models + graph/incidence assembly (constant efficiencies)
-main_pwl_hub      % automatic equations for arbitrary configs + PWL variable efficiencies
-main_ieee33_hub   % energy hubs as active nodes in the IEEE 33-bus system
+main_energy_hub          % component models + graph/incidence assembly (constant efficiencies)
+main_pwl_hub              % automatic equations for arbitrary configs + PWL variable efficiencies
+main_ieee33_hub            % energy hubs as active nodes in the IEEE 33-bus system
+main_multiscale_dispatch   % day-ahead / intraday / real-time coordinated LP dispatch + generalized storage
 ```
 
 `main_pwl_hub.m` prints a quantified PWL-vs-constant-efficiency error
