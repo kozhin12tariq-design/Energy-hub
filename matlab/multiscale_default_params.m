@@ -105,4 +105,29 @@ function p = multiscale_default_params()
     p.reserve.elecLoadFrac  = 0.10;
     p.reserve.solarFrac     = 0.15;
     p.reserve.heatLoadFrac  = 0.15;
+
+    % Carbon intensity, for the case-study emissions comparison
+    % (main_case_studies.m). Grid factor is a typical national-average
+    % grid mix; H2 reflects a low-carbon (e.g. partly electrolytic)
+    % supply, well below grid average but not zero.
+    p.co2.gridFactor = 0.40;  % kgCO2/kWh electricity (net import - export)
+    p.co2.H2Factor   = 0.15;  % kgCO2/kWh H2 fuel
+
+    % Conventional baseline (Case 1 in main_case_studies.m): no PV/FC/heat
+    % pump/storage at all -- electricity 100% from grid, heat from a
+    % simple gas boiler. Represents the "before energy hub" reference
+    % point the whole thesis is measured against.
+    p.Boiler.eta      = 0.90;   % thermal efficiency
+    p.Boiler.priceGas = 0.08;   % $/kWh fuel
+    p.Boiler.co2Gas   = 0.20;   % kgCO2/kWh fuel (natural gas combustion)
+
+    % Reliability check: assumed contracted feeder import/export capacity
+    % (main_case_studies.m / reliability_check.m), expressed as a
+    % multiple of the FULL system's (Case 4) day-ahead peak import.
+    % margin=1.0 models a capacity contracted EXACTLY to the submitted
+    % day-ahead schedule with no slack -- a realistic demand-charge /
+    % capacity-market scenario, and deliberately tight enough that
+    % coordination and robustness failures (Cases 2-3) show up as actual
+    % violations rather than being absorbed by generous headroom.
+    p.reliability.feederCapMargin = 1.0;
 end

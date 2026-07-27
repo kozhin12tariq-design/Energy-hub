@@ -1,7 +1,7 @@
-function fc = forecast_profiles(seed)
+function fc = forecast_profiles(seed, uncertaintyScale)
 %FORECAST_PROFILES Day-ahead / intraday / real-time forecast hierarchy.
 %
-%   fc = FORECAST_PROFILES(seed)
+%   fc = FORECAST_PROFILES(seed, uncertaintyScale)
 %
 %   Generates one self-consistent 24-hour scenario at three resolutions
 %   with decreasing uncertainty, matching the three dispatch levels:
@@ -17,7 +17,12 @@ function fc = forecast_profiles(seed)
 %       average of the true profile plus a SMALLER residual noise term,
 %       i.e. an imperfect but much-improved near-term forecast.
 %
-%   seed: RNG seed for reproducibility (same seed -> same scenario).
+%   seed             : RNG seed for reproducibility (same seed -> same scenario)
+%   uncertaintyScale : multiplies every noise std dev (default 1 = the
+%                      base scenario used throughout this repo); used by
+%                      main_sensitivity_analysis.m to sweep forecast-error
+%                      severity without changing anything else about the
+%                      scenario.
 %
 %   Output struct fc, all power in kW, price in $/kWh:
 %     hours (24x1), slots15 (96x1), slots5 (288x1)
@@ -26,6 +31,7 @@ function fc = forecast_profiles(seed)
 %     RT.solar, RT.Lelec, RT.Lheat                                   (288x1)
 
     if nargin < 1 || isempty(seed); seed = 42; end
+    if nargin < 2 || isempty(uncertaintyScale); uncertaintyScale = 1.0; end
     rand('seed', seed); %#ok<RAND> -- Octave-compatible seeding
     randn('seed', seed); %#ok<RAND>
 
@@ -51,9 +57,9 @@ function fc = forecast_profiles(seed)
     Lelec_shape = interp1(hours, Lelec_DA, t5_hours, 'linear', 'extrap');
     Lheat_shape = interp1(hours, Lheat_DA, t5_hours, 'linear', 'extrap');
 
-    solar_noise = ar1_noise(288, 0.85, 0.10);   % slow-varying multiplicative cloud transients
-    Lelec_noise = ar1_noise(288, 0.7, 0.06);
-    Lheat_noise = ar1_noise(288, 0.7, 0.05);
+    solar_noise = ar1_noise(288, 0.85, 0.10*uncertaintyScale);   % slow-varying multiplicative cloud transients
+    Lelec_noise = ar1_noise(288, 0.7, 0.06*uncertaintyScale);
+    Lheat_noise = ar1_noise(288, 0.7, 0.05*uncertaintyScale);
 
     solar_RT = max(0, solar_shape .* (1 + solar_noise));
     solar_RT(solar_shape <= 0) = 0;
@@ -68,9 +74,9 @@ function fc = forecast_profiles(seed)
         Lelec_ID(k) = mean(Lelec_RT(idx5));
         Lheat_ID(k) = mean(Lheat_RT(idx5));
     end
-    solar_ID = max(0, solar_ID .* (1 + ar1_noise(96, 0.6, 0.04)));
-    Lelec_ID = max(0, Lelec_ID .* (1 + ar1_noise(96, 0.5, 0.03)));
-    Lheat_ID = max(0, Lheat_ID .* (1 + ar1_noise(96, 0.5, 0.03)));
+    solar_ID = max(0, solar_ID .* (1 + ar1_noise(96, 0.6, 0.04*uncertaintyScale)));
+    Lelec_ID = max(0, Lelec_ID .* (1 + ar1_noise(96, 0.5, 0.03*uncertaintyScale)));
+    Lheat_ID = max(0, Lheat_ID .* (1 + ar1_noise(96, 0.5, 0.03*uncertaintyScale)));
 
     fc.hours = hours; fc.slots15 = slots15; fc.slots5 = slots5;
     fc.DA.solar = solar_DA; fc.DA.Lelec = Lelec_DA; fc.DA.Lheat = Lheat_DA;
