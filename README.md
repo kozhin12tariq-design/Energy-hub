@@ -1,17 +1,26 @@
 # Energy Hub (Fuel Cell + PV + Battery + EV) — MATLAB/Octave
 
-Two modeling steps, matching the thesis roadmap's Month-1 scope:
+Four modeling steps, matching the thesis roadmap's Month-1 and Month-2
+(items I–II) scope:
 
-1. **Individual component models** (PV, Fuel Cell, Battery, EV) built with
-   the incidence-and-coupling-matrix approach, each on its own small
-   local graph.
-2. **Graph theory hub assembly**: the components are wired onto shared
-   carrier buses (electricity, heat) into one global graph, and the
-   hub's coupling matrix `L = C*P` is *derived* from the global
-   incidence matrix — capturing **bidirectional flow** (storage
-   charge/discharge as two independent edges) and **MIMO conversion**
-   (the fuel cell's single hydrogen input drives both an electrical and
-   a thermal output at once).
+1. **Individual component models** (PV, Fuel Cell, Battery, EV,
+   Electrolyzer) built with the incidence-and-coupling-matrix approach,
+   each on its own small local graph.
+2. **Graph theory hub assembly**: components are wired onto shared
+   carrier buses (electricity, heat, hydrogen) into one global graph,
+   capturing **bidirectional flow** (storage charge/discharge as two
+   independent edges) and **MIMO conversion** (the fuel cell's single
+   hydrogen input drives an electrical *and* a thermal output at once).
+3. **Standardized coupling matrix, automatic for arbitrary
+   configurations**: shared buses are found by naming convention (no
+   per-hub wiring code), and `energy_hub_print_equations.m` prints the
+   literal energy-flow equations generated from any edge list. Proven by
+   building two structurally different hubs from the same component
+   library with no solver changes.
+4. **Piecewise Linearization (PWL) of variable efficiencies**: realistic
+   nonlinear part-load efficiency curves (Fuel Cell, PV, Electrolyzer)
+   are PWL-fitted and shown to track the true curve far more closely
+   than a single constant efficiency — quantified, not just claimed.
 
 Tested with Octave 8.4 (headless via `xvfb-run`); no toolboxes required.
 
@@ -23,61 +32,97 @@ every case (`eh_edge.m`):
 
 - `'input'` — exogenous branch, value fixed by one entry of the hub's
   input vector `P` (grid import, fuel, solar, storage discharge, ...).
-- `'dependent'` — branch value = `eta * inflow(tail node)`, where
+- `'dependent'` — branch value = `eta_or_PWL(inflow(tail node))`, where
   `inflow` is read directly off the node-edge **incidence matrix** `A`
-  (the edges whose head is that node). This single rule is what makes
-  both requested behaviors fall out for free:
-  - **MIMO**: if a node is the tail of *several* dependent edges (the
-    fuel cell's `FC_out` node feeds both `Elec_Bus` and `Heat_Bus`),
+  (the edges whose head is that node) and `eta_or_PWL` is either a
+  constant scalar efficiency/dispatch factor or a piecewise-linear curve
+  (`pwl_fit_from_function.m`). This single rule is what makes every
+  requested behavior fall out for free:
+  - **MIMO**: a node can be the tail of *several* dependent edges (the
+    fuel cell's `FC_out` node feeds both `Elec_Bus` and `Heat_Bus`), so
     one input drives multiple outputs simultaneously.
   - **Bidirectional flow**: storage devices sit on *two* directed edges
     between the bus and the storage cell (discharge = `input`, charge =
-    `dependent` on a dispatch factor), not on one signed variable — so
+    `dependent` on a dispatch factor), not one signed variable — so
     charge/discharge can have different efficiencies and be evaluated
     independently.
+  - **Variable efficiency**: the same rule accepts a PWL curve in place
+    of a constant, with no change to the graph structure.
 
-`energy_hub_assemble.m` is the graph-theory step: it merges every
-component's local edges into one global graph, identifying any endpoint
-name that matches a declared shared bus (e.g. `'Elec_Bus'`) as the same
-global node across components, and privately namespacing every other
-name to its owning component instance. `energy_hub_incidence_matrix.m`
-and `energy_hub_coupling_matrix.m` are completely generic — unchanged by
-adding components, buses, or MIMO/bidirectional branches — because every
-edge becomes one equation (`M*f = N*P`), stacked and solved once
-(`C = S*(M\N)`).
+`energy_hub_assemble.m` merges an *arbitrary* list of components into
+one global graph automatically: any endpoint name ending in `"_Bus"`
+(e.g. `'Elec_Bus'`, `'H2_Bus'`) is recognized as a shared carrier bus
+across every component that references it; every other name is
+namespaced to its owning instance. Adding a new component type that
+introduces a new carrier (e.g. `component_electrolyzer.m` adding
+`'H2_Bus'`) requires no change to the assembler or to any existing
+component — the concrete demonstration for "automatic generation of
+energy flow equations for arbitrary configurations".
+
+### Linear vs. piecewise-linear hubs
+
+`energy_hub_coupling_matrix.m` builds **one** global matrix `C` such
+that `L = C*P` everywhere — only valid if every dependent edge has a
+constant Eta (it now explicitly refuses PWL edges with a clear error
+pointing at the two functions below). For hubs with PWL branches:
+
+- `energy_hub_evaluate_hub.m` — exact evaluation at one concrete `P`,
+  resolving edges in dependency order (works for constant and PWL edges
+  alike; the only requirement is no circular value dependency, true of
+  every physically assembled hub graph).
+- `energy_hub_linearize.m` — builds a **local** affine map
+  `L =~ C_local*P + d_local` valid near one operating point `P0`, by
+  replacing each PWL edge with the (slope, intercept) of its active
+  breakpoint segment at `P0`. Reproduces the exact result at `P0`
+  itself; the approximation error grows once `P` moves into a different
+  segment than the one active at `P0` — demonstrated numerically in
+  `main_pwl_hub.m`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `matlab/eh_edge.m` | Edge-spec constructor used by every component and by hub-level (grid/load) branches |
+| `matlab/eh_edge.m` | Edge-spec constructor (Eta = constant or PWL struct) used by every component and hub-level branch |
+| `matlab/eh_describe_eta.m` | Human-readable label for a constant or PWL Eta |
 | `matlab/components/component_pv.m` | PV array — unidirectional, SISO |
 | `matlab/components/component_fuelcell.m` | Fuel cell — unidirectional, **MIMO** (1 fuel input -> elec + heat outputs) |
 | `matlab/components/component_battery.m` | Battery Energy Storage — **bidirectional** (charge/discharge as independent edges) |
 | `matlab/components/component_ev.m` | EV battery (V2G) — same bidirectional structure + mobility/V2G flags |
-| `matlab/energy_hub_assemble.m` | Graph-theory step: merges components onto shared buses into one global node/edge list |
+| `matlab/components/component_electrolyzer.m` | Electrolyzer (Power-to-Gas) — bus-dispatched load chained into a conversion edge; proves a new component/carrier needs no assembler changes |
+| `matlab/energy_hub_assemble.m` | Graph-theory step: auto-detects shared buses by name, merges components into one global node/edge list |
 | `matlab/energy_hub_incidence_matrix.m` | Builds the global incidence matrix `A` from any edge list |
-| `matlab/energy_hub_coupling_matrix.m` | Derives `C` from `A` (generic; unchanged by topology) |
+| `matlab/energy_hub_coupling_matrix.m` | Derives the global `C` from `A` (constant-efficiency hubs only; refuses PWL edges) |
+| `matlab/energy_hub_evaluate_hub.m` | Exact numeric evaluation of any hub (constant and/or PWL edges) at one input vector |
+| `matlab/energy_hub_linearize.m` | Local affine coupling matrix (`C_local`, `d_local`) around one operating point, for PWL hubs |
+| `matlab/energy_hub_print_equations.m` | Auto-prints the energy-flow equations generated from any edge list |
 | `matlab/energy_hub_display_component.m` | Prints + returns a single component's own standalone local incidence matrix |
-| `matlab/energy_hub_example_hub.m` | Builds the worked example hub (PV1+FC1+Batt1+EV1) for a given dispatch operating point |
+| `matlab/energy_hub_example_hub.m` | Builds the worked example hub (PV1+FC1+Batt1+EV1) for a given dispatch operating point; accepts PWL or constant PV/FC components |
+| `matlab/pwl_fit_from_function.m` | Fits PWL breakpoints to a nonlinear part-load efficiency function |
+| `matlab/pwl_evaluate.m` | Exact PWL curve evaluation (interpolation) |
+| `matlab/pwl_local_affine.m` | Local (slope, intercept) of a PWL curve at one point |
 | `matlab/energy_hub_default_params.m` | Component efficiencies/capacities/power limits |
-| `matlab/energy_hub_plot_graph.m` | Auto-layout graph drawing (any topology, not hardcoded) |
+| `matlab/energy_hub_plot_graph.m` | Auto-layout graph drawing (any topology; labels PWL edges) |
 | `matlab/storage_soc_update.m` | State-of-charge update applying the storage device's own (dis)charge efficiency, kept outside the port-level coupling matrix |
 | `matlab/print_labeled_matrix.m`, `matlab/print_labeled_vector.m` | Console-printing helpers |
-| `matlab/main_energy_hub.m` | Runs both steps end to end with the worked example |
+| `matlab/main_energy_hub.m` | Component models + graph assembly demo (constant efficiencies) |
+| `matlab/main_pwl_hub.m` | Automatic-equation-generation + PWL demo (this round's two tasks) |
 
 ## Running
 
 ```matlab
 cd matlab
-main_energy_hub
+main_energy_hub   % component models + graph/incidence assembly (constant efficiencies)
+main_pwl_hub      % automatic equations for arbitrary configs + PWL variable efficiencies
 ```
 
-Prints each component's standalone local incidence matrix, assembles the
-full hub, prints the global incidence matrix `A` and coupling matrix
-`C`, verifies the MIMO fuel-cell derivatives and per-carrier energy
-balance numerically, evaluates two operating points with the storage
-devices in opposite flow directions, and plots the hub graph.
+`main_pwl_hub.m` prints a quantified PWL-vs-constant-efficiency error
+table (Fuel Cell, PV, Electrolyzer), assembles the worked hub with
+PWL-fitted Fuel Cell/PV branches, auto-prints its equations, shows
+`energy_hub_coupling_matrix.m` correctly refusing that PWL hub, exact
+PWL evaluation vs. local linearization at increasing distance from an
+operating point, then assembles a second, structurally different hub
+(PV1+PV2+Electrolyzer, Power-to-Gas) with the same assembler and zero
+topology-specific code.
 
 ## Scope note
 

@@ -28,8 +28,16 @@ function [C, A, M, N] = energy_hub_coupling_matrix(edges, nNodes, nInputs, outpu
 %       L = S * f = S * (M \ N) * P = C * P
 %   so   C = S * (M \ N).
 %
+%   This closed-form global C is only valid when every 'dependent' edge
+%   has a constant scalar Eta. Edges with a PWL (variable-efficiency)
+%   Eta -- see eh_edge.m / pwl_fit_from_function.m -- make the hub
+%   piecewise-linear rather than linear, so there is no single C valid
+%   everywhere; use energy_hub_evaluate_hub.m (exact, any operating
+%   point) or energy_hub_linearize.m (local C valid near one operating
+%   point) for hubs containing PWL edges.
+%
 %   Inputs
-%     edges         : edge struct array, see energy_hub_define_network.m
+%     edges         : edge struct array, see energy_hub_assemble.m
 %     nNodes        : number of nodes
 %     nInputs       : number of independent hub inputs (columns of C)
 %     outputEdgeIdx : edge indices selected as hub outputs (rows of C)
@@ -51,6 +59,13 @@ function [C, A, M, N] = energy_hub_coupling_matrix(edges, nNodes, nInputs, outpu
             case 'input'
                 N(k, edges(k).InputIndex) = 1;
             case 'dependent'
+                if ~isnumeric(edges(k).Eta)
+                    error('energy_hub_coupling_matrix:pwl', ...
+                        ['Edge %d ("%s") has a non-constant (PWL) Eta -- a single global ' ...
+                         'coupling matrix cannot represent a piecewise-linear hub. Use ' ...
+                         'energy_hub_evaluate_hub.m or energy_hub_linearize.m instead.'], ...
+                        k, edges(k).Label);
+                end
                 node = edges(k).From;
                 inflowEdges = find(A(node, :) == -1);
                 M(k, inflowEdges) = M(k, inflowEdges) - edges(k).Eta;

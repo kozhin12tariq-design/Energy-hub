@@ -54,7 +54,12 @@ function energy_hub_plot_graph(nodeNames, edges)
         labelFrac = 0.22 + 0.16 * mod(k, 3);
         labelPos = (1-labelFrac)*(p1+off) + labelFrac*(p2+off);
         vOff = 0.12 * (1 - 2*mod(k, 2));
-        text(labelPos(1), labelPos(2) + vOff, sprintf('e%d (%.2f)', k, edges(k).Eta), ...
+        if isnumeric(edges(k).Eta)
+            edgeLabel = sprintf('e%d (%.2f)', k, edges(k).Eta);
+        else
+            edgeLabel = sprintf('e%d (PWL)', k);
+        end
+        text(labelPos(1), labelPos(2) + vOff, edgeLabel, ...
             'FontSize', 7, 'Color', [0.2 0.4 0.8], 'HorizontalAlignment', 'center');
     end
 

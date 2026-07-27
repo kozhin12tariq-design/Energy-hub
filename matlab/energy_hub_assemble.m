@@ -1,31 +1,38 @@
 function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] = ...
-    energy_hub_assemble(sharedBuses, components, extraEdges)
+    energy_hub_assemble(components, extraEdges)
 %ENERGY_HUB_ASSEMBLE Assemble individual component models into one hub graph.
 %
 %   [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] = ...
-%       ENERGY_HUB_ASSEMBLE(sharedBuses, components, extraEdges)
+%       ENERGY_HUB_ASSEMBLE(components, extraEdges)
 %
-%   This is the graph-theory step that ties the individually-modeled
-%   components (component_pv.m, component_fuelcell.m, ...) together into
-%   one hub: every component contributes a small local graph (its
-%   `.edges` list of eh_edge specs using local node names); this
-%   function merges them into one global node/edge list by identifying
-%   any endpoint name that matches a shared bus (e.g. 'Elec_Bus',
-%   'Heat_Bus') as the SAME global node across every component, while
-%   giving every other endpoint name a component-private namespace
-%   (`<instanceName>_<localName>`) so multiple instances of the same
-%   component type never collide.
+%   This is the "standardized coupling matrix ... automatic generation of
+%   energy flow equations for arbitrary configurations" step: every
+%   component contributes a small local graph (its `.edges` list of
+%   eh_edge specs using local node names); this function merges an
+%   ARBITRARY list of them into one global node/edge list with no
+%   per-configuration code -- add, remove, or duplicate components and
+%   the same assembler call produces the right graph.
+%
+%   Shared carrier buses (electricity, heat, hydrogen, ...) are found
+%   automatically by naming convention: any endpoint name ending in
+%   "_Bus" (e.g. 'Elec_Bus', 'Heat_Bus', 'H2_Bus') is treated as the SAME
+%   global node across every component that references it; every other
+%   endpoint name is private to its owning component instance
+%   (namespaced `<instanceName>_<localName>`) so multiple instances of
+%   the same component type never collide. This is what lets a new
+%   component type introduce a brand new carrier bus (e.g. an
+%   electrolyzer adding 'H2_Bus') without editing this function or any
+%   other existing component.
 %
 %   The resulting node/edge list already carries everything
-%   energy_hub_incidence_matrix.m / energy_hub_coupling_matrix.m need
-%   (From, To, Type, Eta, InputIndex) -- those two functions are
-%   completely unchanged by adding components, buses, or MIMO/
-%   bidirectional branches, because "dependent edge = eta * inflow(tail
-%   node)" already covers both cases generically (see eh_edge.m).
+%   energy_hub_incidence_matrix.m / energy_hub_coupling_matrix.m /
+%   energy_hub_evaluate_hub.m need (From, To, Type, Eta, InputIndex) --
+%   none of those solvers change with topology, buses, or component
+%   count, because "dependent edge = eta_or_PWL(inflow(tail node))"
+%   already covers arbitrary MIMO/bidirectional/nonlinear branches (see
+%   eh_edge.m).
 %
 %   Inputs
-%     sharedBuses : cellstr of global bus/carrier node names, e.g.
-%                   {'Elec_Bus','Heat_Bus'}
 %     components  : cell array of component structs (each with .name and
 %                   .edges, as returned by the component_*.m functions)
 %     extraEdges  : cell array of eh_edge specs for hub-level branches
@@ -47,8 +54,8 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
         c = components{ci};
         for ei = 1:numel(c.edges)
             e = c.edges{ei};
-            e.From = resolve_name(e.From, c.name, sharedBuses);
-            e.To   = resolve_name(e.To,   c.name, sharedBuses);
+            e.From = resolve_name(e.From, c.name);
+            e.To   = resolve_name(e.To,   c.name);
             e.Component = c.name;
             rawSpecs{end+1} = e; %#ok<AGROW>
         end
@@ -98,8 +105,8 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
     nInputs = numel(inputLabels);
 end
 
-function name = resolve_name(rawName, compName, sharedBuses)
-    if any(strcmp(rawName, sharedBuses))
+function name = resolve_name(rawName, compName)
+    if ~isempty(regexp(rawName, '_Bus$', 'once'))
         name = rawName;
     else
         name = [compName '_' rawName];

@@ -1,14 +1,24 @@
 function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] = ...
-    energy_hub_example_hub(p, v_elec, v_heat, ev_plugged_in)
+    energy_hub_example_hub(p, v_elec, v_heat, ev_plugged_in, pvComponent, fcComponent)
 %ENERGY_HUB_EXAMPLE_HUB Build the PV1+FC1+Batt1+EV1 example hub for a given
 %dispatch operating point (v_elec, v_heat).
 %
 %   Factored out of main_energy_hub.m so different operating points (e.g.
 %   "battery discharging" vs. "battery charging") can each assemble their
 %   own consistent hub without duplicating the component/edge wiring.
+%
+%   pvComponent, fcComponent (optional) let a caller substitute PWL-fitted
+%   PV/Fuel-Cell components (see main_pwl_hub.m) instead of the default
+%   constant-efficiency ones built from `p`; leave empty to use defaults.
 
     if nargin < 4 || isempty(ev_plugged_in)
         ev_plugged_in = true;
+    end
+    if nargin < 5 || isempty(pvComponent)
+        pvComponent = component_pv('PV1', p.eta_PV);
+    end
+    if nargin < 6 || isempty(fcComponent)
+        fcComponent = component_fuelcell('FC1', p.eta_FC_e, p.eta_FC_th);
     end
 
     if abs(sum(v_elec) - 1) > 1e-9
@@ -20,11 +30,9 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
             'v_heat (heat bus dispatch factors) must sum to 1, got sum = %.6f.', sum(v_heat));
     end
 
-    sharedBuses = {'Elec_Bus', 'Heat_Bus'};
-
     components = { ...
-        component_pv('PV1', p.eta_PV), ...
-        component_fuelcell('FC1', p.eta_FC_e, p.eta_FC_th), ...
+        pvComponent, ...
+        fcComponent, ...
         component_battery('Batt1', v_elec(2)), ...
         component_ev('EV1', v_elec(3), ev_plugged_in, true) ...
     };
@@ -38,5 +46,5 @@ function [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] =
     };
 
     [nodeNames, edges, nInputs, inputLabels, outputEdgeIdx, outputLabels] = ...
-        energy_hub_assemble(sharedBuses, components, extraEdges);
+        energy_hub_assemble(components, extraEdges);
 end
