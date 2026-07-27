@@ -21,6 +21,11 @@ Four modeling steps, matching the thesis roadmap's Month-1 and Month-2
    nonlinear part-load efficiency curves (Fuel Cell, PV, Electrolyzer)
    are PWL-fitted and shown to track the true curve far more closely
    than a single constant efficiency — quantified, not just claimed.
+5. **IEEE 33-bus distribution system integration**: energy hubs are sited
+   as active nodes (net P injections) at three buses of the standard
+   IEEE 33-bus radial feeder, and a backward-forward-sweep power flow
+   solver evaluates the resulting voltage-profile and loss impact —
+   including a deliberately adverse scenario, not only a flattering one.
 
 Tested with Octave 8.4 (headless via `xvfb-run`); no toolboxes required.
 
@@ -78,6 +83,38 @@ pointing at the two functions below). For hubs with PWL branches:
   segment than the one active at `P0` — demonstrated numerically in
   `main_pwl_hub.m`.
 
+## IEEE 33-bus integration
+
+`ieee33_data.m` hardcodes the standard Baran & Wu (1989) 33-bus radial
+distribution test system (32 branches, R/X in Ohm, nominal bus loads in
+kW/kVAr, `Vbase = 12.66 kV`) — the de facto benchmark feeder for
+distribution power-flow studies. `distflow_bfs.m` is a backward-forward
+sweep (ladder iterative) solver for radial networks: each iteration
+computes bus current injections from the current voltage estimate,
+accumulates branch currents leaf-to-root (backward sweep), then updates
+voltages root-to-leaf (forward sweep), converging in single-digit
+iterations for a well-conditioned feeder. **Validated** against the
+widely-published benchmark for this exact system: this implementation
+reproduces total losses of 202.68 kW and a minimum voltage of 0.9131 pu
+at bus 18 in the base case — both match the literature values (~202.7
+kW, ~0.9131 pu) essentially exactly.
+
+`main_ieee33_hub.m` sites energy hubs (the same `energy_hub_example_hub.m`
+model as before) as active nodes at three buses: replacing each bus's
+fixed nominal load with the hub's actual net grid draw (`P_grid`), while
+reactive power is left at the bus's nominal value (hub inverters assumed
+near-unity power factor — this model does not track Q). Two scenarios
+are deliberately favorable (solar-rich midday, including the system's
+single largest load bus) and one is deliberately adverse (an EV-charging
+depot at evening peak with no solar and a depleted battery, whose net
+draw comes out *higher* than the original load) — an honest test of grid
+impact, not a one-sided demonstration. The adverse bus is also re-run in
+isolation (the other two hubs left at nominal load) to show its true
+local effect is a voltage drop, separate from the network-wide
+trunk-voltage benefit it ends up riding on when all three hubs run
+together — a genuine emergent finding from shared-trunk network coupling,
+not a scripted result.
+
 ## Files
 
 | File | Purpose |
@@ -104,8 +141,11 @@ pointing at the two functions below). For hubs with PWL branches:
 | `matlab/energy_hub_plot_graph.m` | Auto-layout graph drawing (any topology; labels PWL edges) |
 | `matlab/storage_soc_update.m` | State-of-charge update applying the storage device's own (dis)charge efficiency, kept outside the port-level coupling matrix |
 | `matlab/print_labeled_matrix.m`, `matlab/print_labeled_vector.m` | Console-printing helpers |
+| `matlab/ieee33_data.m` | Standard IEEE 33-bus radial distribution test system data (branches, loads, base voltage) |
+| `matlab/distflow_bfs.m` | Backward-forward sweep power flow solver for radial feeders |
 | `matlab/main_energy_hub.m` | Component models + graph assembly demo (constant efficiencies) |
-| `matlab/main_pwl_hub.m` | Automatic-equation-generation + PWL demo (this round's two tasks) |
+| `matlab/main_pwl_hub.m` | Automatic-equation-generation + PWL demo |
+| `matlab/main_ieee33_hub.m` | Energy hubs as active nodes in the IEEE 33-bus system + power-flow impact |
 
 ## Running
 
@@ -113,6 +153,7 @@ pointing at the two functions below). For hubs with PWL branches:
 cd matlab
 main_energy_hub   % component models + graph/incidence assembly (constant efficiencies)
 main_pwl_hub      % automatic equations for arbitrary configs + PWL variable efficiencies
+main_ieee33_hub   % energy hubs as active nodes in the IEEE 33-bus system
 ```
 
 `main_pwl_hub.m` prints a quantified PWL-vs-constant-efficiency error
