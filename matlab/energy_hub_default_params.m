@@ -2,8 +2,9 @@ function p = energy_hub_default_params()
 %ENERGY_HUB_DEFAULT_PARAMS Default technical parameters for the hub components.
 
     % Converter efficiencies
-    p.eta_FC = 0.50;   % fuel cell electrical efficiency (H2 -> elec)
-    p.eta_PV = 0.97;   % PV array + inverter efficiency (solar -> elec)
+    p.eta_FC_e  = 0.45;  % fuel cell electrical efficiency (H2 -> elec)
+    p.eta_FC_th = 0.35;  % fuel cell recoverable heat efficiency (H2 -> heat, MIMO output)
+    p.eta_PV    = 0.97;  % PV array + inverter efficiency (solar -> elec)
 
     % Battery energy storage (e.g. residential BESS)
     p.Batt.eta_ch  = 0.95;  % charging efficiency

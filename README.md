@@ -1,63 +1,70 @@
 # Energy Hub (Fuel Cell + PV + Battery + EV) — MATLAB/Octave
 
-Energy hub model built with the classical **coupling matrix method**
-(Geidl & Andersson), then **reformulated as a node/edge incidence-matrix
-graph problem**, so the coupling matrix `C` in `L = C*P` is *derived*
-from the hub's graph topology instead of being written by hand.
+Two modeling steps, matching the thesis roadmap's Month-1 scope:
+
+1. **Individual component models** (PV, Fuel Cell, Battery, EV) built with
+   the incidence-and-coupling-matrix approach, each on its own small
+   local graph.
+2. **Graph theory hub assembly**: the components are wired onto shared
+   carrier buses (electricity, heat) into one global graph, and the
+   hub's coupling matrix `L = C*P` is *derived* from the global
+   incidence matrix — capturing **bidirectional flow** (storage
+   charge/discharge as two independent edges) and **MIMO conversion**
+   (the fuel cell's single hydrogen input drives both an electrical and
+   a thermal output at once).
 
 Tested with Octave 8.4 (headless via `xvfb-run`); no toolboxes required.
 
-## Model
+## Modeling approach
 
-**Ports**
+Every component is a small directed graph: local nodes = its energy-carrier
+ports, local edges = its conversion/storage branches. Two edge types cover
+every case (`eh_edge.m`):
 
-- Inputs `P = [P_grid; P_H2; P_solar; P_batt_discharge; P_EV_discharge]`
-- Outputs `L = [L_elec; P_batt_charge; P_EV_charge]`
+- `'input'` — exogenous branch, value fixed by one entry of the hub's
+  input vector `P` (grid import, fuel, solar, storage discharge, ...).
+- `'dependent'` — branch value = `eta * inflow(tail node)`, where
+  `inflow` is read directly off the node-edge **incidence matrix** `A`
+  (the edges whose head is that node). This single rule is what makes
+  both requested behaviors fall out for free:
+  - **MIMO**: if a node is the tail of *several* dependent edges (the
+    fuel cell's `FC_out` node feeds both `Elec_Bus` and `Heat_Bus`),
+    one input drives multiple outputs simultaneously.
+  - **Bidirectional flow**: storage devices sit on *two* directed edges
+    between the bus and the storage cell (discharge = `input`, charge =
+    `dependent` on a dispatch factor), not on one signed variable — so
+    charge/discharge can have different efficiencies and be evaluated
+    independently.
 
-**Graph** (`matlab/energy_hub_define_network.m`)
-
-9 nodes: `Grid_in, H2_in, Solar_in, FuelCell, PV, Bus, Battery, EV, Elec_Load`
-
-10 directed edges: grid/H2/solar/battery-discharge/EV-discharge feed the
-`Bus` node (5 independent/exogenous edges); `FuelCell -> Bus` and
-`PV -> Bus` are dependent edges scaled by `eta_FC` / `eta_PV`; `Bus ->
-Elec_Load`, `Bus -> Battery`, `Bus -> EV` are dependent edges scaled by
-dispatch (splitting) factors `v = [v1 v2 v3]`, `sum(v) = 1`.
-
-**Incidence matrix** (`matlab/energy_hub_incidence_matrix.m`)
-
-Standard node-edge incidence matrix `A` (9x10): `A(i,k) = +1` if edge `k`
-leaves node `i`, `-1` if it enters node `i`.
-
-**Coupling matrix from the incidence matrix**
-(`matlab/energy_hub_coupling_matrix.m`)
-
-Every edge becomes one linear equation in the edge-flow vector `f`:
-independent edges fix `f(k) = P(...)`; dependent edges enforce
-`f(k) = Eta(k) * inflow(From(k))`, where `inflow(node)` is read directly
-off `A` as the edges with `A(node,:) == -1`. Stacking gives `M*f = N*P`,
-and the outputs are a fixed selection `L = S*f`, so
-
-```
-C = S * (M \ N)
-```
-
-`matlab/energy_hub_coupling_matrix_classic.m` contains the same hub's
-hand-derived closed form (`C = v' * [1, eta_FC, eta_PV, 1, 1]`) purely to
-cross-check the graph-derived result — `main_energy_hub.m` asserts the
-two are numerically identical.
+`energy_hub_assemble.m` is the graph-theory step: it merges every
+component's local edges into one global graph, identifying any endpoint
+name that matches a declared shared bus (e.g. `'Elec_Bus'`) as the same
+global node across components, and privately namespacing every other
+name to its owning component instance. `energy_hub_incidence_matrix.m`
+and `energy_hub_coupling_matrix.m` are completely generic — unchanged by
+adding components, buses, or MIMO/bidirectional branches — because every
+edge becomes one equation (`M*f = N*P`), stacked and solved once
+(`C = S*(M\N)`).
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `matlab/energy_hub_define_network.m` | Node/edge graph definition |
-| `matlab/energy_hub_incidence_matrix.m` | Builds `A` from the edge list |
-| `matlab/energy_hub_coupling_matrix.m` | Derives `C` from `A` (incidence-matrix method) |
-| `matlab/energy_hub_coupling_matrix_classic.m` | Closed-form `C` for validation |
-| `matlab/energy_hub_default_params.m` | Component parameters (efficiencies, capacities, power limits) |
-| `matlab/energy_hub_plot_graph.m` | Draws the node/edge graph |
-| `matlab/main_energy_hub.m` | Runs everything: prints `A`, validates `C`, evaluates one operating point, then a 24 h rule-based dispatch demo with battery/EV state of charge |
+| `matlab/eh_edge.m` | Edge-spec constructor used by every component and by hub-level (grid/load) branches |
+| `matlab/components/component_pv.m` | PV array — unidirectional, SISO |
+| `matlab/components/component_fuelcell.m` | Fuel cell — unidirectional, **MIMO** (1 fuel input -> elec + heat outputs) |
+| `matlab/components/component_battery.m` | Battery Energy Storage — **bidirectional** (charge/discharge as independent edges) |
+| `matlab/components/component_ev.m` | EV battery (V2G) — same bidirectional structure + mobility/V2G flags |
+| `matlab/energy_hub_assemble.m` | Graph-theory step: merges components onto shared buses into one global node/edge list |
+| `matlab/energy_hub_incidence_matrix.m` | Builds the global incidence matrix `A` from any edge list |
+| `matlab/energy_hub_coupling_matrix.m` | Derives `C` from `A` (generic; unchanged by topology) |
+| `matlab/energy_hub_display_component.m` | Prints + returns a single component's own standalone local incidence matrix |
+| `matlab/energy_hub_example_hub.m` | Builds the worked example hub (PV1+FC1+Batt1+EV1) for a given dispatch operating point |
+| `matlab/energy_hub_default_params.m` | Component efficiencies/capacities/power limits |
+| `matlab/energy_hub_plot_graph.m` | Auto-layout graph drawing (any topology, not hardcoded) |
+| `matlab/storage_soc_update.m` | State-of-charge update applying the storage device's own (dis)charge efficiency, kept outside the port-level coupling matrix |
+| `matlab/print_labeled_matrix.m`, `matlab/print_labeled_vector.m` | Console-printing helpers |
+| `matlab/main_energy_hub.m` | Runs both steps end to end with the worked example |
 
 ## Running
 
@@ -66,6 +73,17 @@ cd matlab
 main_energy_hub
 ```
 
-The 24-hour dispatch loop in `main_energy_hub.m` uses a simple
-priority-order heuristic (PV -> storage -> fuel cell -> grid) purely to
-exercise the model over time — it is a placeholder, not an optimizer.
+Prints each component's standalone local incidence matrix, assembles the
+full hub, prints the global incidence matrix `A` and coupling matrix
+`C`, verifies the MIMO fuel-cell derivatives and per-carrier energy
+balance numerically, evaluates two operating points with the storage
+devices in opposite flow directions, and plots the hub graph.
+
+## Scope note
+
+Dispatch factors (`v`) and storage discharge inputs are free parameters
+of the coupling matrix at this stage — nothing here enforces that a
+device cannot be charging and discharging at once. That is an operating
+*constraint* for whichever optimizer chooses `v` and `P` at each
+timestep (a later stage), not something the graph/coupling-matrix model
+itself is responsible for.
