@@ -136,39 +136,73 @@ function p = multiscale_default_params()
     p.Pipe.Pdis_max = 20.0;   % kW
     p.Pipe.selfLoss = 0.04;   % per hour (~25h time constant, well insulated)
 
-    % Economics -- TWO NAMED HYDROGEN-PRICE SCENARIOS.
+    % Economics -- THREE NAMED HYDROGEN-PRICE SCENARIOS.
     %
     % Hydrogen cost is the single parameter that decides whether the fuel
     % cell runs at all, and it is currently changing fast, so this project
-    % treats it as a deliberate two-point scenario axis rather than one
-    % fixed number. Both points are anchored to published figures, and
-    % both are quoted per kg as well as per kWh because the hydrogen
-    % literature prices in $/kg while this dispatch model works in $/kWh
-    % of fuel energy. Conversion uses hydrogen's LOWER heating value,
-    % 120 MJ/kg = 33.3 kWh/kg:
+    % treats it as a deliberate scenario axis rather than one fixed
+    % number. Every point is anchored to a published figure and quoted per
+    % kg as well as per kWh, because the hydrogen literature prices in
+    % $/kg while this dispatch model works in $/kWh of fuel energy.
+    % Conversion uses hydrogen's LOWER heating value, 120 MJ/kg =
+    % 33.3 kWh/kg.
     %
-    %   H2_today     $0.22/kWh = $7.33/kg -- representative of clean
-    %       hydrogen DELIVERED to an end user today. The U.S. DOE puts
-    %       hydrogen produced from renewable energy at roughly $5/kg;
-    %       compression, storage, transport and dispensing put the
-    %       delivered cost meaningfully above that production-gate figure.
-    %   H2_doeTarget $0.06/kWh = $2.00/kg -- the DOE's interim clean-
-    %       hydrogen cost target for 2026 (Clean Hydrogen Electrolysis
-    %       Program, Bipartisan Infrastructure Law), the near-term
-    %       milestone en route to the Hydrogen Shot goal of $1/kg by 2031
-    %       ("1 1 1": $1 per 1 kg in 1 decade, launched June 2021).
+    % PRODUCTION GATE vs. DELIVERED -- the distinction that makes three
+    % scenarios necessary rather than two. DOE's headline hydrogen cost
+    % targets are PRODUCTION targets: the Bipartisan Infrastructure Law's
+    % Clean Hydrogen Electrolysis Program funds "$2/kg clean hydrogen from
+    % electrolysis by 2026", and the Hydrogen Shot's $1/kg by 2031 is
+    % likewise the cost of PRODUCING hydrogen. Neither includes
+    % compression, storage, transport or dispensing. DOE tracks delivered
+    % cost separately and with much larger numbers -- its dispensed-cost
+    % target for heavy-duty vehicles is $7/kg by 2028, i.e. several times
+    % the production target for the same era. A fuel cell in a building
+    % pays a DELIVERED price, so comparing today's delivered cost against
+    % a future production-gate cost would overstate the improvement by
+    % silently switching basis mid-comparison. Hence:
+    %
+    %   H2_today $0.22/kWh = $7.33/kg -- DELIVERED to an end user today.
+    %       DOE puts hydrogen produced from renewable energy at roughly
+    %       $5/kg at the production gate; delivery/compression/dispensing
+    %       put the delivered cost meaningfully above that.
+    %   H2_doeTargetDelivered $2.93/kg -- the LIKE-FOR-LIKE target, and
+    %       the one to compare against H2_today. It is DOE's $2/kg 2026
+    %       production target carried to the meter using this file's own
+    %       implied delivery markup ($7.33 delivered / $5.00 production =
+    %       1.465x), derived in code below so the basis is auditable
+    %       rather than a magic constant. This assumes stationary delivery
+    %       costs scale like today's; DOE's $7/kg vehicle-dispensing
+    %       target covers a different, costlier pathway (700-bar fuelling
+    %       stations), so it is not the right analogue for a building.
+    %   H2_doeTargetGate $0.06/kWh = $2.00/kg -- DOE's 2026 production
+    %       target AT THE GATE, used unmodified. This is an OPTIMISTIC
+    %       BOUND, not a like-for-like comparison: it is what a fuel cell
+    %       would pay only if delivery were free. Reported alongside the
+    %       delivered figure so results are bracketed by a range instead
+    %       of resting on a point estimate.
     %
     % The result is a genuine sensitivity finding rather than a tuning
-    % knob: at today's delivered hydrogen cost the fuel cell is simply
-    % uneconomic against grid import and the optimizer never starts it
+    % knob: at today's delivered cost the fuel cell is uneconomic against
+    % grid import and the optimizer never starts it
     % (main_month3_multiscale_dispatch.m reports FC fuel = 0), while at
-    % the DOE target price it becomes economic and runs at part load --
-    % which is exactly the regime where the PWL/MILP part-load model
-    % earns its keep. See main_month3_multiscale_dispatch.m, which runs
-    % both scenarios and prints them side by side.
-    p.scenarios.H2_today     = 0.22;  % $/kWh fuel (= $7.33/kg at 33.3 kWh/kg)
-    p.scenarios.H2_doeTarget = 0.06;  % $/kWh fuel (= $2.00/kg at 33.3 kWh/kg)
-    p.scenarios.H2_kWhPerKg  = 33.3;  % hydrogen LHV, for $/kWh <-> $/kg conversion
+    % both target prices it becomes economic and runs at PART LOAD --
+    % exactly the regime where the PWL/MILP part-load model earns its
+    % keep. How MUCH it earns depends on how hard the fuel cell runs; see
+    % Case 5 in main_month4a_case_studies.m, which reports the PWL cost
+    % benefit at both target prices rather than a single number.
+    p.scenarios.H2_kWhPerKg = 33.3;   % hydrogen LHV, for $/kWh <-> $/kg
+    p.scenarios.H2_today    = 0.22;   % $/kWh DELIVERED (= $7.33/kg)
+    p.scenarios.H2_doeTargetGate = 0.06;  % $/kWh PRODUCTION GATE (= $2.00/kg)
+
+    % Delivery markup implied by this file's own two delivered/production
+    % figures for TODAY, then applied to the gate target to put it on the
+    % same delivered basis as H2_today. Derived, not hardcoded, so the
+    % assumption is visible and auditable.
+    p.scenarios.H2_prodToday_perKg = 5.00;   % DOE, renewable H2 at the production gate
+    p.scenarios.H2_deliveryMarkup  = ...
+        (p.scenarios.H2_today * p.scenarios.H2_kWhPerKg) / p.scenarios.H2_prodToday_perKg;
+    p.scenarios.H2_doeTargetDelivered = ...
+        p.scenarios.H2_doeTargetGate * p.scenarios.H2_deliveryMarkup;  % ~0.0879 $/kWh = $2.93/kg
 
     % Default = today's price, so every existing result (Cases 1-4, the
     % sensitivity sweeps) is unchanged by the introduction of the

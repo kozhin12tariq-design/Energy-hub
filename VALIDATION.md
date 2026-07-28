@@ -413,3 +413,140 @@ cheap enough to dispatch.
 Again, no file was reorganized, moved, renamed, merged, or split, and
 no optimization model, MILP formulation, PWL segment structure,
 fill-order binary, or solver call was changed.
+
+---
+
+# Fix 4 — hydrogen price-basis mismatch, and what it revealed
+
+## What was wrong
+
+The two hydrogen scenarios were quoted on **different cost bases**. The
+comment block was precise that `H2_today` ($0.22/kWh = $7.33/kg) is a
+**delivered** price, explicitly noting that DOE's ~$5/kg figure is at the
+production gate and that delivery puts the real cost above it. But the
+target scenario then silently switched basis: DOE's $2/kg-by-2026 figure
+is a **production** target, not a delivered price.
+
+Verified against energy.gov rather than assumed:
+
+- The Bipartisan Infrastructure Law's Clean Hydrogen Electrolysis Program
+  funds *"$2/kg clean hydrogen **from electrolysis** by 2026"* — a
+  production-gate figure. The Hydrogen Shot's $1/kg by 2031 is likewise
+  the cost of *producing* hydrogen.
+- DOE tracks delivered cost separately and much higher: its **dispensed**
+  hydrogen target for heavy-duty vehicles is **$7/kg by 2028**. (The
+  brief for this fix described that as "below $7/kg"; the published
+  figure is a target *of* $7/kg by 2028, and it is stated that way in the
+  code.)
+
+So the code compared *today's delivered price* against *a future
+production-gate price* — apples to oranges, overstating the improvement.
+
+## The corrected like-for-like price
+
+Applying the file's own implied delivery markup consistently, derived in
+code rather than hardcoded so the basis is auditable:
+
+```
+markup           = $7.33/kg delivered ÷ $5.00/kg production = 1.4652
+DOE 2026 target  = $2.00/kg production × 1.4652 = $2.93/kg delivered
+                 = $0.087912/kWh at 33.3 kWh/kg LHV
+```
+
+Rather than replace one scenario with another, the parameter file now
+defines **three**, each with its basis stated: `H2_today` (delivered,
+default), `H2_doeTargetDelivered` (delivered, like-for-like headline),
+and `H2_doeTargetGate` (production, optimistic bound). Results are
+reported as a bracketed range instead of a point estimate.
+
+`H2_doeTargetGate` is kept at exactly `0.06`, so the segment sweep — which
+uses it — is numerically unchanged under the new name.
+
+**The qualitative finding survives the correction.** Day-ahead dispatch,
+verified across the price range:
+
+| Price | Basis | FC fuel | Hours active |
+|---|---|---|---|
+| $0.0600/kWh ($2.00/kg) | production gate (optimistic bound) | 339.2 kWh | 5 |
+| **$0.0879/kWh ($2.93/kg)** | **delivered, like-for-like** | **138.2 kWh** | **2** |
+| $0.1000/kWh ($3.33/kg) | — | 129.3 kWh | 2 |
+| $0.1200/kWh ($4.00/kg) | — | 14.5 kWh | 1 |
+
+The fuel cell is still economic, still at part load, still exercising the
+PWL/MILP path. Part-load ranges were re-measured rather than carried
+over: **40–52%** of rated fuel input at the delivered price and **37–55%**
+at the gate price (the previously reported 37–55% is the gate figure only).
+
+## The finding: the PWL benefit is utilization-dependent
+
+Re-running the full Case 5 comparison at both target prices:
+
+| Hydrogen price | FC fuel / hours | PWL realized | Constant realized | Constant vs. PWL |
+|---|---|---|---|---|
+| $2.93/kg delivered | 138.2 kWh / 2 h | $46.2724 | $46.3637 | **+0.20%** |
+| $2.00/kg gate | 339.2 kWh / 5 h | $38.1960 | $38.7564 | **+1.47%** |
+
+The PWL cost advantage is **strongly utilization-dependent** — 1.47% when
+the fuel cell runs 339 kWh over 5 hours, 0.20% when it runs 138 kWh over
+2 hours. This is physically sensible: a part-load model can only matter
+in proportion to how much energy flows through the nonlinear device, and
+2.5× more fuel flows at the gate price. But it means the previous single
+headline number was quietly conditioned on the optimistic price basis.
+
+This is now reported as a range in the output, in
+`main_month4a_case_studies.m`'s narrative and header, and in `README.md`,
+with the explicit statement that **+0.20% is a smaller claim than
++1.47%**. A result stated with its sensitivity is more defensible than a
+best-case number waiting to be challenged.
+
+**The cost-independent argument is the stronger one**, and is now stated
+alongside: the PWL segments and fill-order binaries exist to keep the
+dispatch *physically possible*, not to save money. Without the ordering
+binaries the LP relaxation fills segment 2 while segment 1 is only
+fractionally full (`PH2seg(2) > 0` at `PH2seg(1) = 4.576` of 30),
+reporting more electricity per unit hydrogen than the device can produce.
+That defect exists at **every** price, including ones where the cost
+difference rounds to zero. A model that violates the machine it describes
+is wrong regardless of what the error costs on a given day.
+
+## Segment sweep — price renamed, numbers unchanged
+
+The sweep moved from `H2_doeTarget` to `H2_doeTargetGate` (same 0.06). It
+now states *why* the gate price is the right choice **there**: it is a
+convergence study, and the gate price maximises fuel-cell throughput,
+giving the clearest signal — legitimate for measuring convergence, but
+not for a cost headline, which is why Case 5 reports both prices.
+Confirmed unchanged (timing columns excluded, being machine noise):
+
+| nSegments | 1 | 2 | 5 | 10 | 20 | 36 |
+|---|---|---|---|---|---|---|
+| MaxErrE | 9.1534 | 4.5050 | 0.9268 | 0.2488 | 0.0851 | 0.0262 |
+| Planned($) | 37.1684 | 34.3998 | 34.6777 | 34.6155 | 34.6093 | 34.6071 |
+| Realized($) | 35.5466 | 42.9298 | 34.6360 | 34.6089 | 34.6068 | 34.6061 |
+| Gap(%) | −4.36 | +24.80 | −0.12 | −0.02 | −0.01 | −0.00 |
+| Optimism | −0.1018 | +0.0058 | −0.0025 | −0.0004 | −0.0002 | −0.0001 |
+
+## Protected values — re-verified after Fix 4
+
+| Check | Value | Status |
+|---|---|---|
+| Cases 1–4 | $176.37 / $50.61 / $50.49 / $49.74, plus CO2, peak, unmetE, violHrs | unchanged |
+| IEEE 33-bus | 202.677 kW / 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data.m` assertions | 3715 kW / 2300 kVAr | pass |
+| Segment sweep, all columns | see table above | unchanged |
+| Case 5 `Optimism` | PWL +0.0060, constant −0.0897 | unchanged |
+| Sweep `Optimism` | n=1 −0.1018 (gap −4.36%), n=2 +0.0058 (gap +24.80%) | unchanged |
+| `Optimism` explanations (both files) | — | unchanged |
+| Fill-order, normal runs (both target prices) | silent | pass |
+| Fill-order, LP relaxation | fires: `PH2seg(2)=4.576272 > 0 while PH2seg(1)=4.576272 < w(1)=30` | still fires |
+| All seven `main_month*.m` | run end-to-end | pass |
+
+## Files touched (Fix 4)
+
+`multiscale_default_params.m`, `main_month3_multiscale_dispatch.m`,
+`main_month4a_case_studies.m`, `main_month4c_pwl_segment_sweep.m`,
+`README.md`, `VALIDATION.md`.
+
+No file was reorganized, moved, renamed, merged, or split, and no
+optimization model, MILP formulation, PWL segment structure, or
+fill-order binary was changed.

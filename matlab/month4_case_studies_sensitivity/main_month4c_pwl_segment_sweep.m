@@ -11,15 +11,25 @@
 %        constant-efficiency error table: MaxErr/RMSE in kW), for BOTH
 %        the fuel cell's electrical and thermal curves.
 %     2) MILP SOLVE TIME: dayahead_dispatch.m's mean wall-clock solve
-%        time at that segment count (mean of 5 solves), run at the same
-%        H2_doeTarget scenario as Case 5 in main_month4a_case_studies.m
-%        ($0.06/kWh = $2.00/kg, the DOE 2026 interim clean-hydrogen
-%        target; see the two named scenarios in
-%        multiscale_default_params.m). At the H2_today default the fuel
-%        cell is never dispatched, so every segment count would solve a
-%        problem whose integer variables are all trivially zero -- the
-%        sweep would report near-identical times and costs and measure
-%        nothing about segmentation.
+%        time at that segment count (mean of 5 solves), run at the
+%        H2_doeTargetGate scenario ($0.06/kWh = $2.00/kg, DOE's 2026
+%        production-gate target; see the three named scenarios in
+%        multiscale_default_params.m).
+%
+%        WHY THE GATE PRICE HERE, when Case 5's headline uses the
+%        like-for-like DELIVERED price instead: this is a CONVERGENCE
+%        study, not an economic claim. The gate price is the cheapest of
+%        the three and therefore maximises fuel-cell throughput (339 kWh
+%        over 5 hours, against 138 kWh over 2 hours delivered), which
+%        puts the most energy through the nonlinear device and gives the
+%        strongest, least noise-dominated signal for how approximation
+%        error and solve time behave as segments are added. Choosing the
+%        operating point that best exercises the thing being measured is
+%        legitimate for a convergence study; it would NOT be legitimate
+%        for the cost headline, which is why Case 5 reports both prices.
+%        At the H2_today default the fuel cell is never dispatched at
+%        all, so every segment count would solve a problem whose integer
+%        variables are trivially zero and the sweep would measure nothing.
 %     3) RESULTING COST: the day-ahead PLAN's own believed cost at that
 %        segment count, and the REALIZED cost once the plan's fuel
 %        purchase (PH2, unaffected by which curve interpretation is
@@ -52,8 +62,11 @@ clear; clc;
 addpath('../month3_multiscale_optimization');
 
 p = multiscale_default_params();
-p.price_H2 = p.scenarios.H2_doeTarget;   % DOE 2026 target scenario, as Case 5;
-                                         % the H2_today default never dispatches the FC.
+p.price_H2 = p.scenarios.H2_doeTargetGate;  % production-gate target: maximises FC
+                                            % throughput, so the convergence signal is
+                                            % clearest (see file header for why this is
+                                            % the right choice HERE but not for Case 5's
+                                            % cost headline).
 fc = forecast_profiles(42);
 
 segCounts = [1, 2, 5, 10, 20, 36];
@@ -74,7 +87,9 @@ y_true_t = p.PWL.eta_FC_th_func(u_test) .* x_test;
 fprintf('=====================================================\n');
 fprintf(' PWL segment-count trade-off (fuel cell curves)\n');
 fprintf('=====================================================\n');
-fprintf('Scenario H2_doeTarget: price_H2=$%.2f/kWh = $%.2f/kg (see file header)\n\n', ...
+fprintf(['Scenario H2_doeTargetGate: price_H2=$%.2f/kWh = $%.2f/kg (production gate).\n' ...
+    'Chosen because it maximises fuel-cell throughput and so gives the clearest\n' ...
+    'convergence signal -- see file header.\n\n'], ...
     p.price_H2, p.price_H2*p.scenarios.H2_kWhPerKg);
 
 for i = 1:nS
