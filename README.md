@@ -40,6 +40,7 @@ main_month3_multiscale_dispatch
 cd ../month4_case_studies_sensitivity
 main_month4a_case_studies
 main_month4b_sensitivity_analysis
+main_month4c_pwl_segment_sweep
 ```
 
 Each script is self-contained (`clear; clc;` + whatever `addpath` it
@@ -75,6 +76,15 @@ automatically: any endpoint name ending in `"_Bus"` is a shared carrier
 bus across every component that references it; everything else is
 namespaced to its owning instance.
 
+**Sign convention note**: `energy_hub_incidence_matrix.m` uses the
+standard graph-theory convention (+1 at an edge's tail node, -1 at its
+head node). The energy-hub literature's own "coupling matrix"
+convention (`energy_hub_coupling_matrix.m`, `P_out = C*P_in`) instead
+signs by port role (+1 input port, -1 output port), a different
+bookkeeping axis that doesn't in general agree edge-by-edge with the
+tail/head signs here. Both are correct for what each is used for; this
+is a documented difference, not a bug, and no behavior depends on it.
+
 Run `main_month1_components_and_graph_theory.m` to see: each
 component's own standalone local incidence matrix
 (`energy_hub_display_component.m`), the assembled global incidence
@@ -100,7 +110,18 @@ energy-balance validation, and a graph plot (`energy_hub_plot_graph.m`).
    Cell, PV, Electrolyzer) are PWL-fitted and shown to track the true
    curve one to two orders of magnitude more closely than a single
    constant efficiency — quantified in a printed error table, not just
-   claimed. Since a single global `C` cannot represent a piecewise-linear
+   claimed. `pwl_utils('fit', ...)` takes an optional breakpoint-
+   placement argument: `'uniform'` (default, used everywhere in this
+   project) spaces breakpoints evenly in load fraction; `'curvature'`
+   concentrates them by equal cumulative |second derivative| instead.
+   Curvature placement is a max-error-oriented heuristic — it reduces
+   MaxErr for 3 of the 4 example curves (all but the electrolyzer, whose
+   curve is close to a plain quadratic with only mildly-varying
+   curvature) but does **not** reliably improve RMSE, which only
+   improves for the fuel-cell electrical curve — an honest, quantified
+   trade-off (`main_month2a...`'s "Breakpoint placement" table), not a
+   universally-better alternative default. Since a single global `C`
+   cannot represent a piecewise-linear
    hub, `energy_hub_coupling_matrix.m` explicitly refuses PWL edges;
    `energy_hub_evaluate_hub.m` (exact evaluation at one operating point)
    and `energy_hub_linearize.m` (local affine map, valid near one
@@ -126,32 +147,57 @@ energy-balance validation, and a graph plot (`energy_hub_plot_graph.m`).
 
 `month3_multiscale_optimization/` (self-contained)
 
-Three genuine linear programs (Octave's built-in `glpk`, not
-heuristics), coordinated so each level starts from where the previous
-one actually left the system:
+Three optimization levels (Octave's built-in `glpk`), coordinated so
+each level starts from where the previous one actually left the system:
 
 - **Day-ahead** (`dayahead_dispatch.m`, hourly, 24-step horizon, solved
   once): minimizes 24h energy cost subject to electrical/heat balance
-  and the generalized-storage state equation for all four devices.
-  **Robustness** is a reserve-margin proxy — every hour must keep enough
-  *unused* storage charge/discharge headroom to cover a fraction of that
-  hour's load/solar forecast — the standard simplification when a full
-  robust-MILP toolchain (YALMIP + Gurobi) isn't available.
+  and the generalized-storage state equation for all four devices. The
+  fuel cell is a genuine **PWL/MILP embedding**, not a standalone Month-2
+  demo: its electrical and thermal part-load efficiency curves are both
+  non-concave/S-shaped, so a plain LP relaxation would cherry-pick a
+  higher-slope segment while leaving a lower one empty (verified
+  numerically — see `VALIDATION.md`). Fill-order binary variables
+  (`u_1..u_(s-1)` per hour) force segments to fill in order, making
+  day-ahead a genuine MILP; `p.PWL.nSegments` (default 5,
+  `multiscale_default_params.m`) controls fidelity, and `nSegments=1`
+  provably collapses back to the old constant-efficiency LP (bit-exact
+  match, verified). **Robustness** is a reserve-margin proxy — every
+  hour must keep enough *unused* storage charge/discharge headroom to
+  cover a fraction of that hour's load/solar forecast — the standard
+  simplification when a full robust-MILP toolchain isn't available. A
+  genuine robust-MILP (e.g. via YALMIP's `robustify` + a solver like
+  Gurobi that handles the resulting semi-infinite/robust-counterpart
+  constraints) would instead optimize against an explicit uncertainty
+  set (box/polyhedral/budget) for solar and load, guaranteeing
+  feasibility for *every* realization in that set rather than just
+  reserving headroom sized to a fraction of the forecast — a real
+  worst-case guarantee instead of a proxy for one. That would need a
+  solver this codebase deliberately doesn't depend on (Octave's `glpk`
+  only), so the reserve-margin proxy is a documented, honest
+  substitute, not a claim of true robustness.
 - **Intraday** (`intraday_dispatch.m`, 15-min, rolling horizon): a
-  genuine **two-stage stochastic LP** re-solved every slot — stage 1 is
+  genuine **two-stage stochastic MILP** re-solved every slot — stage 1 is
   the shared "here-and-now" decision, stage 2 is a 3-scenario (low/mid/
   high solar) recourse decision for the *next* slot, branching from the
-  same stage-1 storage state (true non-anticipativity). Only stage 1 is
-  ever committed — classic receding-horizon dispatch. A soft penalty
-  keeps its storage trajectory close to the (15-min-interpolated)
-  day-ahead plan without forcing an exact match.
+  same stage-1 storage state (true non-anticipativity). The same
+  fuel-cell PWL/MILP segment+binary structure as day-ahead is applied
+  independently in every block (stage 1 and each scenario), since each
+  makes its own fuel cell decision. Only stage 1 is ever committed —
+  classic receding-horizon dispatch. A soft penalty keeps its storage
+  trajectory close to the (15-min-interpolated) day-ahead plan without
+  forcing an exact match.
 - **Real-time** (`realtime_balance.m`, 5-min, fast): re-dispatches only
   the **electrical** carrier, only the fastest resources (grid + battery)
   — matching real grid-operator practice. The fuel cell, heat pump, EV
   charging, and both thermal storages stay at intraday's committed
   setpoint; heat-side mismatch is physically absorbed by the buildings'/
   pipes' own thermal inertia, which doesn't need sub-minute balancing
-  the way electricity does.
+  the way electricity does. The fuel cell's committed fuel is already a
+  fixed number here (not re-optimized), so it's converted to electricity
+  via an exact PWL curve lookup (`pwl_utils('eval', ...)`), not the
+  segment/binary machinery day-ahead/intraday need for the optimization
+  itself.
 
 **Generalized storage** (`storage_soc_update.m`): one state equation,
 `SOC(t) = SOC(t-1) + [eta_ch*Pch - Pdis/eta_dis]*dt/Emax -
@@ -169,10 +215,13 @@ selfLoss*SOC(t-1)*dt`, used for all four devices via
   the optimizer uses it for exactly that.
 
 `main_month3_multiscale_dispatch.m` runs one simulated day end-to-end (1
-day-ahead solve + 96 intraday solves + 288 real-time solves, ~2.5s
-total, via the reusable `simulate_multiscale_day.m`) and plots the grid
-interchange at all three resolutions overlaid, all four devices' SOC
-trajectories, and the real-time correction magnitude over the day.
+day-ahead solve + 96 intraday solves + 288 real-time solves, via the
+reusable `simulate_multiscale_day.m`) and plots the grid interchange at
+all three resolutions overlaid, all four devices' SOC trajectories, and
+the real-time correction magnitude over the day. Solve time is
+machine-dependent; see `VALIDATION.md` for the before/after measurement
+of embedding the fuel cell's PWL/MILP structure into day-ahead and
+intraday (Tasks 1-2 of that log).
 
 ## Month 4 — Case studies and sensitivity analysis
 
@@ -182,8 +231,12 @@ trajectories, and the real-time correction magnitude over the day.
 (`useIntraday` switches full closed-loop vs. **open-loop** — day-ahead
 setpoints held fixed and executed against actual data with no
 adaptation; `reserveScale` multiplies the reserve-margin fractions, 0
-disabling robustness) so it can be re-run for comparison and sweeps
-without duplicating the 385-solve orchestration loop.
+disabling robustness; `usePWL`, default `true`, switches the fuel
+cell's PLANNING model between the true PWL curve and a single constant
+efficiency — the physical/realized side always uses the true curve
+regardless, since the fuel cell doesn't know what the planner assumed)
+so it can be re-run for comparison and sweeps without duplicating the
+385-solve orchestration loop.
 
 ### Case studies (`main_month4a_case_studies.m`)
 
@@ -197,6 +250,19 @@ aggregate:
 | 2: Day-ahead only | Energy hub, day-ahead LP, **open loop** (no intraday/real-time) | Value of the rolling multi-timescale layers |
 | 3: No robust reserve | Full closed loop, `reserveScale=0` | Value of the robust-reserve proxy |
 | 4: Full proposed system | Everything as built | The complete proposed approach |
+| 5: Constant efficiency | Case-4-style closed loop, but day-ahead/intraday PLAN with a constant fuel-cell efficiency instead of PWL (`usePWL=false`); the physical realization still uses the true curve | The value of PWL itself, not a coordination/robustness layer — reported separately, not part of the 1→4 progression |
+
+Case 5 uses its own `price_H2=$0.06` (the shared default `$0.22` never
+makes the fuel cell economical at all in this system, which would make
+the comparison vacuous); Cases 1-4 keep the shared default. Comparing
+REALIZED cost (both variants evaluated against the one true curve, so
+this isolates the modeling choice from forecast noise): constant
+efficiency costs ~1.5% more than PWL at this price point — same
+direction as Huang et al.'s reported 13.7% for a constant-efficiency
+baseline (different system/curves/price levels, not a claim of matching
+their number). See `main_month4c_pwl_segment_sweep.m` (below) for how
+this gap and the underlying curve-fit error both behave as
+`p.PWL.nSegments` varies.
 
 Reliability (`reliability_check.m`) is checked against ONE feeder
 capacity shared by cases 2-4 (contracted exactly to Case 4's own
@@ -239,6 +305,23 @@ small single-seed 2D grid for visualization:
    perfectly, beyond it.
 3. A 4x4 reserve x uncertainty grid (violation hours) visualizes the
    interaction as a heatmap.
+
+### PWL segment-count trade-off (`main_month4c_pwl_segment_sweep.m`)
+
+Sweeps `p.PWL.nSegments` in `{1, 2, 5, 10, 20, 36}` for the fuel cell
+curves, reporting curve-fit approximation error (Max/RMSE vs. the exact
+continuous efficiency function — same methodology as Month 2's error
+table), day-ahead MILP solve time, and planned-vs-realized cost —
+mirroring the accuracy-vs-computation trade-off style used by Huang et
+al. (not a claim of matching their specific numbers). Curve-fit error
+falls monotonically with segment count and MILP solve time grows with
+it (more segment/binary variables per hour) — the two sides of the
+trade-off the thesis is centrally about. The realized-vs-planned cost
+gap is *not* monotonic (each segment count gives the MILP a genuinely
+different feasible region, so it makes a genuinely different fuel
+dispatch decision, not just a more accurate evaluation of one fixed
+plan) — reported honestly rather than smoothed into a cleaner-looking
+curve; see `VALIDATION.md` for the full table.
 
 ## Scope notes
 

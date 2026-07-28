@@ -12,6 +12,20 @@ function A = energy_hub_incidence_matrix(edges, nNodes)
 %   head), so A encodes Kirchhoff's-current-law-style power conservation
 %   for the hub graph: for any node i with no external injection,
 %   A(i,:) * f = 0  <=>  inflow(i) == outflow(i).
+%
+%   SIGN CONVENTION NOTE: this is the standard GRAPH-THEORY incidence
+%   convention (+1 at the tail node, -1 at the head node of each directed
+%   edge). The energy-hub literature's own "coupling matrix" convention
+%   (Geidl & Andersson and followers; see energy_hub_coupling_matrix.m)
+%   instead signs by PORT role -- +1 for an input port, -1 for an output
+%   port of the hub as a whole -- which is a different bookkeeping axis
+%   (port role vs. edge direction at a node) and does not, in general,
+%   agree edge-by-edge with the tail/head signs here. Both conventions
+%   are internally consistent and correct for what each is used for in
+%   this codebase (this file for graph-theoretic node balance equations;
+%   energy_hub_coupling_matrix.m for the hub's input/output port algebra
+%   P_out = C*P_in) -- this is a documentation note about the difference,
+%   not a bug in either file, and no behavior changes as a result of it.
 
     nEdges = numel(edges);
     A = zeros(nNodes, nEdges);
