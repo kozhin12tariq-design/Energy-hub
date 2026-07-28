@@ -39,26 +39,29 @@
 %                                     planner assumed about it -- so a
 %                                     WRONG planning model can plan one
 %                                     cost and realize a different one.
-%                                     Under the DEFAULT price_H2
-%                                     ($0.22/kWh), the fuel cell is never
-%                                     economically dispatched at all in
-%                                     this system (confirmed across every
+%                                     Run at the H2_doeTarget hydrogen
+%                                     price ($0.06/kWh = $2.00/kg, the
+%                                     DOE's 2026 interim clean-hydrogen
+%                                     target -- see the two named
+%                                     scenarios in
+%                                     multiscale_default_params.m), not
+%                                     the H2_today default ($0.22/kWh =
+%                                     $7.33/kg) that Cases 1-4 use. This
+%                                     is the scenario in which the fuel
+%                                     cell is economic at all: at today's
+%                                     delivered hydrogen cost it never
+%                                     dispatches (confirmed across every
 %                                     seed/uncertainty combination used
-%                                     elsewhere in this project), which
-%                                     would make the comparison vacuous
-%                                     (0 fuel either way). Case 5 therefore
-%                                     uses its own lower price_H2 ($0.06,
-%                                     the cheapest round number at which
-%                                     the day-ahead MILP actually
-%                                     dispatches the fuel cell across
-%                                     several hours without pinning it at
-%                                     its rated maximum) so the PWL-vs-
-%                                     constant modeling question is
-%                                     actually observable -- a separate,
-%                                     clearly-labeled price used ONLY for
-%                                     Case 5; Cases 1-4 above are
-%                                     untouched and keep the shared
-%                                     default p.
+%                                     elsewhere in this project), so a
+%                                     PWL-vs-constant comparison there
+%                                     would be vacuous -- 0 fuel either
+%                                     way, identical results, nothing
+%                                     measured. Asking what the fuel
+%                                     cell's part-load model is worth is
+%                                     only a meaningful question in the
+%                                     regime where the fuel cell runs.
+%                                     Cases 1-4 above are untouched and
+%                                     keep the shared default p.
 %
 %   Reliability is checked against a SHARED feeder capacity limit
 %   (p.reliability.feederCapMargin x Case 4's own day-ahead peak import
@@ -140,16 +143,18 @@ fprintf('Removing the robust reserve margin (Case 3 vs 4):     cost %+.1f%%, unm
 fprintf('\n=====================================================\n');
 fprintf(' Case 5: PWL vs. constant fuel cell efficiency\n');
 fprintf('=====================================================\n');
-fprintf(['Default price_H2=$%.2f never makes the fuel cell economical in this\n' ...
-    'system (checked across every seed/uncertainty combination used elsewhere\n' ...
-    'in this project) -- so this case uses its own price_H2=$0.06/kWh fuel,\n' ...
-    'the cheapest round number at which the day-ahead MILP actually dispatches\n' ...
-    'the fuel cell across several hours without pinning it at its rated\n' ...
-    'maximum. This price is used ONLY for Case 5; Cases 1-4 above are\n' ...
-    'untouched.\n'], p.price_H2);
+fprintf(['Run at the H2_doeTarget scenario ($%.2f/kWh = $%.2f/kg, the DOE 2026 interim\n' ...
+    'clean-hydrogen target), not the H2_today default ($%.2f/kWh = $%.2f/kg) used by\n' ...
+    'Cases 1-4. That is the scenario in which the fuel cell is economic at all: at\n' ...
+    'today''s delivered hydrogen cost it never dispatches, so a PWL-vs-constant\n' ...
+    'comparison there would compare 0 fuel against 0 fuel and measure nothing. What\n' ...
+    'a part-load model is worth is only a meaningful question where the component\n' ...
+    'actually runs. Cases 1-4 above are untouched.\n'], ...
+    p.scenarios.H2_doeTarget, p.scenarios.H2_doeTarget*p.scenarios.H2_kWhPerKg, ...
+    p.scenarios.H2_today, p.scenarios.H2_today*p.scenarios.H2_kWhPerKg);
 
 p5 = p;
-p5.price_H2 = 0.06;
+p5.price_H2 = p.scenarios.H2_doeTarget;
 
 fprintf('\nRunning Case 5a (PWL: planning model matches the true fuel cell curve)...\n');
 C5pwl = simulate_multiscale_day(p5, fc, struct('useIntraday', true, 'reserveScale', 1.0, 'usePWL', true));

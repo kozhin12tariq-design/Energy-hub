@@ -11,12 +11,15 @@
 %        constant-efficiency error table: MaxErr/RMSE in kW), for BOTH
 %        the fuel cell's electrical and thermal curves.
 %     2) MILP SOLVE TIME: dayahead_dispatch.m's mean wall-clock solve
-%        time at that segment count (mean of 5 solves), using the same
-%        price_H2=$0.06 "fuel-cell-active" scenario as Case 5 in
-%        main_month4a_case_studies.m -- at the DEFAULT price_H2 the fuel
-%        cell is never dispatched (see that script's header), which
-%        would make solve time trivial (near-instant B&B) regardless of
-%        segment count and defeat the point of this sweep.
+%        time at that segment count (mean of 5 solves), run at the same
+%        H2_doeTarget scenario as Case 5 in main_month4a_case_studies.m
+%        ($0.06/kWh = $2.00/kg, the DOE 2026 interim clean-hydrogen
+%        target; see the two named scenarios in
+%        multiscale_default_params.m). At the H2_today default the fuel
+%        cell is never dispatched, so every segment count would solve a
+%        problem whose integer variables are all trivially zero -- the
+%        sweep would report near-identical times and costs and measure
+%        nothing about segmentation.
 %     3) RESULTING COST: the day-ahead PLAN's own believed cost at that
 %        segment count, and the REALIZED cost once the plan's fuel
 %        purchase (PH2, unaffected by which curve interpretation is
@@ -49,8 +52,8 @@ clear; clc;
 addpath('../month3_multiscale_optimization');
 
 p = multiscale_default_params();
-p.price_H2 = 0.06;   % same FC-active price as Case 5 (main_month4a_case_studies.m);
-                     % default $0.22 never dispatches the fuel cell at all.
+p.price_H2 = p.scenarios.H2_doeTarget;   % DOE 2026 target scenario, as Case 5;
+                                         % the H2_today default never dispatches the FC.
 fc = forecast_profiles(42);
 
 segCounts = [1, 2, 5, 10, 20, 36];
@@ -71,7 +74,8 @@ y_true_t = p.PWL.eta_FC_th_func(u_test) .* x_test;
 fprintf('=====================================================\n');
 fprintf(' PWL segment-count trade-off (fuel cell curves)\n');
 fprintf('=====================================================\n');
-fprintf('Using price_H2=$%.2f (fuel-cell-active scenario; see file header)\n\n', p.price_H2);
+fprintf('Scenario H2_doeTarget: price_H2=$%.2f/kWh = $%.2f/kg (see file header)\n\n', ...
+    p.price_H2, p.price_H2*p.scenarios.H2_kWhPerKg);
 
 for i = 1:nS
     n = segCounts(i);

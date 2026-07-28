@@ -199,6 +199,38 @@ each level starts from where the previous one actually left the system:
   segment/binary machinery day-ahead/intraday need for the optimization
   itself.
 
+### Two hydrogen-price scenarios
+
+Hydrogen cost is the single parameter that decides whether the fuel cell
+runs at all, so it is treated as a deliberate two-point scenario axis
+(`p.scenarios` in `multiscale_default_params.m`) rather than one fixed
+number. Both points are anchored to published figures, converted at
+hydrogen's lower heating value of 120 MJ/kg = 33.3 kWh/kg:
+
+| Scenario | $/kWh fuel | $/kg | Anchor |
+|---|---|---|---|
+| `H2_today` (default) | 0.22 | 7.33 | Clean hydrogen delivered to an end user today. DOE puts renewable-sourced hydrogen at roughly $5/kg at the production gate; compression, storage, transport and dispensing put delivered cost above that. |
+| `H2_doeTarget` | 0.06 | 2.00 | DOE's interim 2026 clean-hydrogen cost target (Clean Hydrogen Electrolysis Program, Bipartisan Infrastructure Law) — the near-term milestone en route to the Hydrogen Shot goal of $1/kg by 2031 ("1 1 1": $1 per 1 kg in 1 decade). |
+
+`main_month3_multiscale_dispatch.m` runs the full stack at **both**,
+changing only `p.price_H2`, and prints them side by side. At today's
+delivered cost the fuel cell is uneconomic against grid import and the
+optimizer correctly never starts it (the headline energy mix reports
+`FC fuel = 0` — the right economic answer, not a broken component). At
+the DOE target it runs 5 hours a day, cutting day-ahead grid import 61%
+and emissions 28%.
+
+The important part is *how* it runs: at **37–55% of rated fuel input**,
+never at the rated point a single nameplate efficiency is calibrated to.
+That is the regime where a constant efficiency is least accurate and
+where the PWL/MILP part-load formulation actually contributes. So the
+two scenarios together answer "what is the PWL model for?" — it is inert
+at today's prices because the component it describes is inert, and it
+becomes load-bearing exactly when hydrogen gets cheap enough to
+dispatch. Month 4's Case 5 and the segment sweep both run at
+`H2_doeTarget` for the same reason: asking what a part-load model is
+worth is only a meaningful question where the component actually runs.
+
 **Generalized storage** (`storage_soc_update.m`): one state equation,
 `SOC(t) = SOC(t-1) + [eta_ch*Pch - Pdis/eta_dis]*dt/Emax -
 selfLoss*SOC(t-1)*dt`, used for all four devices via
@@ -252,9 +284,11 @@ aggregate:
 | 4: Full proposed system | Everything as built | The complete proposed approach |
 | 5: Constant efficiency | Case-4-style closed loop, but day-ahead/intraday PLAN with a constant fuel-cell efficiency instead of PWL (`usePWL=false`); the physical realization still uses the true curve | The value of PWL itself, not a coordination/robustness layer — reported separately, not part of the 1→4 progression |
 
-Case 5 uses its own `price_H2=$0.06` (the shared default `$0.22` never
-makes the fuel cell economical at all in this system, which would make
-the comparison vacuous); Cases 1-4 keep the shared default. Comparing
+Case 5 runs at the `H2_doeTarget` hydrogen scenario ($0.06/kWh =
+$2.00/kg — see [Two hydrogen-price scenarios](#two-hydrogen-price-scenarios)
+above), because that is the scenario in which the fuel cell is economic
+at all; at the `H2_today` default it never dispatches, so the comparison
+would weigh 0 fuel against 0 fuel. Cases 1-4 keep the default. Comparing
 REALIZED cost (both variants evaluated against the one true curve, so
 this isolates the modeling choice from forecast noise): constant
 efficiency costs ~1.5% more than PWL at this price point — same

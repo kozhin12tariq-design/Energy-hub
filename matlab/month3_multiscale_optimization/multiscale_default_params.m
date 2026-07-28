@@ -136,11 +136,44 @@ function p = multiscale_default_params()
     p.Pipe.Pdis_max = 20.0;   % kW
     p.Pipe.selfLoss = 0.04;   % per hour (~25h time constant, well insulated)
 
-    % Economics -- H2 priced as a mid-merit/peaking resource: cheaper than
-    % peak grid import, more expensive than off-peak/shoulder, so the
-    % optimizer actually has to trade off sources instead of running the
-    % fuel cell as baseload 24/7.
-    p.price_H2 = 0.22;  % $/kWh fuel
+    % Economics -- TWO NAMED HYDROGEN-PRICE SCENARIOS.
+    %
+    % Hydrogen cost is the single parameter that decides whether the fuel
+    % cell runs at all, and it is currently changing fast, so this project
+    % treats it as a deliberate two-point scenario axis rather than one
+    % fixed number. Both points are anchored to published figures, and
+    % both are quoted per kg as well as per kWh because the hydrogen
+    % literature prices in $/kg while this dispatch model works in $/kWh
+    % of fuel energy. Conversion uses hydrogen's LOWER heating value,
+    % 120 MJ/kg = 33.3 kWh/kg:
+    %
+    %   H2_today     $0.22/kWh = $7.33/kg -- representative of clean
+    %       hydrogen DELIVERED to an end user today. The U.S. DOE puts
+    %       hydrogen produced from renewable energy at roughly $5/kg;
+    %       compression, storage, transport and dispensing put the
+    %       delivered cost meaningfully above that production-gate figure.
+    %   H2_doeTarget $0.06/kWh = $2.00/kg -- the DOE's interim clean-
+    %       hydrogen cost target for 2026 (Clean Hydrogen Electrolysis
+    %       Program, Bipartisan Infrastructure Law), the near-term
+    %       milestone en route to the Hydrogen Shot goal of $1/kg by 2031
+    %       ("1 1 1": $1 per 1 kg in 1 decade, launched June 2021).
+    %
+    % The result is a genuine sensitivity finding rather than a tuning
+    % knob: at today's delivered hydrogen cost the fuel cell is simply
+    % uneconomic against grid import and the optimizer never starts it
+    % (main_month3_multiscale_dispatch.m reports FC fuel = 0), while at
+    % the DOE target price it becomes economic and runs at part load --
+    % which is exactly the regime where the PWL/MILP part-load model
+    % earns its keep. See main_month3_multiscale_dispatch.m, which runs
+    % both scenarios and prints them side by side.
+    p.scenarios.H2_today     = 0.22;  % $/kWh fuel (= $7.33/kg at 33.3 kWh/kg)
+    p.scenarios.H2_doeTarget = 0.06;  % $/kWh fuel (= $2.00/kg at 33.3 kWh/kg)
+    p.scenarios.H2_kWhPerKg  = 33.3;  % hydrogen LHV, for $/kWh <-> $/kg conversion
+
+    % Default = today's price, so every existing result (Cases 1-4, the
+    % sensitivity sweeps) is unchanged by the introduction of the
+    % scenario names above.
+    p.price_H2 = p.scenarios.H2_today;  % $/kWh fuel
 
     % Reserve-margin robustness proxy for day-ahead scheduling: required
     % headroom as a fraction of that hour's forecast, must be covered by
