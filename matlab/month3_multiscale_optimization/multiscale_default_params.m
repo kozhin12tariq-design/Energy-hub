@@ -3,6 +3,14 @@ function p = multiscale_default_params()
 %
 %   p = MULTISCALE_DEFAULT_PARAMS()
 %
+%   Calls addpath() for '../month2_coupling_matrix_pwl_ieee33' so
+%   pwl_utils.m (a reusable utility function, not a script) is reachable
+%   regardless of which Month 3/4 script is the entry point. This is the
+%   ONLY dependency Month 3 has on Month 2: the nonlinear efficiency
+%   CURVE DEFINITIONS below are copied in directly (not imported from
+%   main_month2a's script) so Month 3 never depends on a Month 2 demo
+%   script, only on the small fit/eval toolbox.
+%
 %   A separate parameter set from energy_hub_default_params.m (used by
 %   the earlier component/graph/PWL/IEEE33 chapters, whose example
 %   numbers are already tuned and validated) sized for a small
@@ -30,9 +38,44 @@ function p = multiscale_default_params()
 %       baseline return temperature; same equations, larger capacity,
 %       slower power limits, better-insulated (smaller selfLoss).
 
+    thisFile = mfilename('fullpath');
+    addpath(fullfile(fileparts(thisFile), '..', 'month2_coupling_matrix_pwl_ieee33'));
+
     p.eta_FC_e  = 0.45;
     p.eta_FC_th = 0.35;
     p.eta_PV    = 0.97;
+    % NOTE: p.eta_FC_e/p.eta_FC_th above are no longer used by the fuel
+    % cell's electrical/heat balance rows in dayahead_dispatch.m /
+    % intraday_dispatch.m -- those now use the segmented PWL curves in
+    % p.PWL (below), fit from p.PWL.eta_FC_e_func/eta_FC_th_func. The two
+    % scalars are kept only because other (unrelated) parts of the
+    % codebase may still reference them for documentation/back-reference
+    % purposes; they play no role in the fuel cell's dispatch physics
+    % from this file onward.
+
+    % ---------------------------------------------------------------
+    % PWL (piecewise-linear) part-load efficiency model for the fuel
+    % cell, embedded directly into the day-ahead/intraday MILP dispatch
+    % (not just a standalone Month-2 demonstration). See
+    % dayahead_dispatch.m for how the segment/ordering-binary structure
+    % is built from these breakpoints.
+    %
+    % Both curves are S-shaped / non-concave (verified numerically: FC
+    % electrical slopes at nSegments=5 are 0.4453, 0.5078, 0.4578,
+    % 0.3245, 0.1146 -- segment 2's slope EXCEEDS segment 1's, so a
+    % plain LP relaxation would cherry-pick segment 2 while leaving
+    % segment 1 empty, reporting more electricity than the fuel cell can
+    % physically produce at that fuel level. Fill-order binary variables
+    % (u_1..u_{s-1} per time step) are therefore mandatory, not optional:
+    % PH2_seg(k+1) <= w(k+1)*u_k and PH2_seg(k) >= w(k)*u_k forces
+    % segment k+1 to stay empty until segment k is completely full.
+    p.PWL.nSegments = 5;      % breakpoints per curve = nSegments+1
+    p.PWL.FC_H2_max = 150;    % kW fuel, rated/maximum H2 input (shared
+                              % Pmax for both curves and the PH2_total bound)
+    p.PWL.eta_FC_e_func  = @(u) 0.30 + 0.35*sqrt(u) - 0.28*u.^2;
+    p.PWL.eta_FC_th_func = @(u) 0.15 + 0.25*u.^0.7;
+    p.PWL.bkpt_e  = pwl_utils('fit', p.PWL.eta_FC_e_func,  p.PWL.FC_H2_max, p.PWL.nSegments, 'FC_elec');
+    p.PWL.bkpt_th = pwl_utils('fit', p.PWL.eta_FC_th_func, p.PWL.FC_H2_max, p.PWL.nSegments, 'FC_heat');
 
     % Heat pump: the fuel cell is not the ONLY heat source -- without an
     % electricity-to-heat alternative, total heat demand would dictate a
