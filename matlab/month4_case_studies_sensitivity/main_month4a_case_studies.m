@@ -23,6 +23,42 @@
 %     Case 4 "Full proposed system": everything as built (robust day-ahead
 %                                     + rolling intraday/real-time), the
 %                                     complete approach this thesis proposes.
+%     Case 5 "Constant efficiency"  : NOT part of the Case 1-4 progression
+%                                     (it isolates PWL itself, not a
+%                                     coordination/robustness layer) --
+%                                     full Case-4-style closed loop, but
+%                                     the PLANNING stack (day-ahead +
+%                                     intraday) believes the fuel cell has
+%                                     ONE constant efficiency instead of
+%                                     the true nonlinear PWL curve
+%                                     (opts.usePWL=false in
+%                                     simulate_multiscale_day.m). The
+%                                     physical realization always uses
+%                                     the TRUE curve regardless -- the
+%                                     fuel cell doesn't know what the
+%                                     planner assumed about it -- so a
+%                                     WRONG planning model can plan one
+%                                     cost and realize a different one.
+%                                     Under the DEFAULT price_H2
+%                                     ($0.22/kWh), the fuel cell is never
+%                                     economically dispatched at all in
+%                                     this system (confirmed across every
+%                                     seed/uncertainty combination used
+%                                     elsewhere in this project), which
+%                                     would make the comparison vacuous
+%                                     (0 fuel either way). Case 5 therefore
+%                                     uses its own lower price_H2 ($0.06,
+%                                     the cheapest round number at which
+%                                     the day-ahead MILP actually
+%                                     dispatches the fuel cell across
+%                                     several hours without pinning it at
+%                                     its rated maximum) so the PWL-vs-
+%                                     constant modeling question is
+%                                     actually observable -- a separate,
+%                                     clearly-labeled price used ONLY for
+%                                     Case 5; Cases 1-4 above are
+%                                     untouched and keep the shared
+%                                     default p.
 %
 %   Reliability is checked against a SHARED feeder capacity limit
 %   (p.reliability.feederCapMargin x Case 4's own day-ahead peak import
@@ -99,6 +135,60 @@ fprintf('Removing intraday/real-time correction (Case 2 vs 4): cost %+.1f%%, unm
     100*(cost(2)-cost(4))/cost(4), unmetE(2)-unmetE(4), violHrs(2)-violHrs(4));
 fprintf('Removing the robust reserve margin (Case 3 vs 4):     cost %+.1f%%, unmet energy %+.2f kWh, violations %+.2f h\n', ...
     100*(cost(3)-cost(4))/cost(4), unmetE(3)-unmetE(4), violHrs(3)-violHrs(4));
+
+%% Case 5: PWL vs. constant fuel cell efficiency (isolates PWL itself) ------
+fprintf('\n=====================================================\n');
+fprintf(' Case 5: PWL vs. constant fuel cell efficiency\n');
+fprintf('=====================================================\n');
+fprintf(['Default price_H2=$%.2f never makes the fuel cell economical in this\n' ...
+    'system (checked across every seed/uncertainty combination used elsewhere\n' ...
+    'in this project) -- so this case uses its own price_H2=$0.06/kWh fuel,\n' ...
+    'the cheapest round number at which the day-ahead MILP actually dispatches\n' ...
+    'the fuel cell across several hours without pinning it at its rated\n' ...
+    'maximum. This price is used ONLY for Case 5; Cases 1-4 above are\n' ...
+    'untouched.\n'], p.price_H2);
+
+p5 = p;
+p5.price_H2 = 0.06;
+
+fprintf('\nRunning Case 5a (PWL: planning model matches the true fuel cell curve)...\n');
+C5pwl = simulate_multiscale_day(p5, fc, struct('useIntraday', true, 'reserveScale', 1.0, 'usePWL', true));
+
+fprintf('Running Case 5b (constant efficiency: planning model is WRONG about the fuel cell)...\n');
+C5const = simulate_multiscale_day(p5, fc, struct('useIntraday', true, 'reserveScale', 1.0, 'usePWL', false));
+
+V5pwl   = reliability_check(C5pwl.Pg_imp5,   C5pwl.Pg_exp5,   feederCap);
+V5const = reliability_check(C5const.Pg_imp5, C5const.Pg_exp5, feederCap);
+
+fprintf('\n%-24s %12s %12s %12s %12s\n', 'Case 5 variant', 'Planned($)', 'Actual($)', 'Gap($)', 'Gap(%)');
+fprintf('%-24s %12.4f %12.4f %12.4f %12.2f\n', 'PWL (correct model)', C5pwl.plannedCost, C5pwl.actualCost, ...
+    C5pwl.actualCost-C5pwl.plannedCost, 100*(C5pwl.actualCost-C5pwl.plannedCost)/abs(C5pwl.plannedCost));
+fprintf('%-24s %12.4f %12.4f %12.4f %12.2f\n', 'Constant efficiency', C5const.plannedCost, C5const.actualCost, ...
+    C5const.actualCost-C5const.plannedCost, 100*(C5const.actualCost-C5const.plannedCost)/abs(C5const.plannedCost));
+
+relErrRealized = 100*(C5const.actualCost - C5pwl.actualCost)/abs(C5pwl.actualCost);
+if relErrRealized >= 0
+    moreOrLess = 'more';
+else
+    moreOrLess = 'less';
+end
+fprintf(['\nEach row''s own planned-vs-actual gap shows what happens when a plan is optimal for\n' ...
+    'the WRONG model of its own fuel cell: the PWL row plans and realizes against the SAME\n' ...
+    '(true) curve, so its gap is only the usual day-ahead/intraday forecast-vs-actual solar\n' ...
+    'and load mismatch. The constant-efficiency row plans against a flat rated-point\n' ...
+    'efficiency that is NOT what the fuel cell actually does at its dispatched (mostly\n' ...
+    'part-load) operating points, adding a second, modeling-driven source of planned-vs-\n' ...
+    'realized divergence on top of that same forecast mismatch.\n' ...
+    '\nComparing REALIZED cost (both evaluated against the one true curve, so this isolates\n' ...
+    'the modeling choice from forecast noise): constant efficiency costs %.2f%% %s than PWL\n' ...
+    '(literature comparison point: Huang et al. report 13.7%% for a constant-efficiency\n' ...
+    'baseline against their true curve -- not the same system, curves, or price levels, so\n' ...
+    'not a claim of matching their number, only the same kind of comparison).\n' ...
+    'CO2: PWL=%.2f kg vs constant=%.2f kg (%+.2f kg). Reliability: PWL unmetE=%.3f kWh/%.3f\n' ...
+    'violHrs vs constant unmetE=%.3f kWh/%.3f violHrs.\n'], ...
+    abs(relErrRealized), moreOrLess, C5pwl.emissions_kgCO2, C5const.emissions_kgCO2, ...
+    C5const.emissions_kgCO2-C5pwl.emissions_kgCO2, V5pwl.unmetEnergy_kWh, V5pwl.violationHours, ...
+    V5const.unmetEnergy_kWh, V5const.violationHours);
 
 %% Plots
 try

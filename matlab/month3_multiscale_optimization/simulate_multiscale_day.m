@@ -26,6 +26,28 @@ function res = simulate_multiscale_day(p, fc, opts)
 %     reserveScale : 1 (default) multiplies p.reserve.* before calling
 %                    dayahead_dispatch.m -- 0 disables the robust-margin
 %                    proxy entirely.
+%     usePWL       : true (default) -> day-ahead and intraday plan against
+%                    the real PWL fuel cell curves (p.PWL.nSegments, as
+%                    fit in multiscale_default_params.m). false -> the
+%                    PLANNING stack (day-ahead + intraday) instead
+%                    believes the fuel cell has ONE constant efficiency
+%                    (a 1-segment PWL fit, i.e. the flat rated-point
+%                    slope through eta_func(1) -- exactly the
+%                    nSegments=1 degenerate case verified in
+%                    dayahead_dispatch.m/intraday_dispatch.m), isolating
+%                    the value of PWL itself. The PHYSICAL/REALIZED side
+%                    (realtime_balance.m and simulate_open_loop's inline
+%                    real-time formula) always converts the committed
+%                    PH2 through the TRUE nonlinear curve regardless of
+%                    this switch -- the fuel cell does not know or care
+%                    what the optimizer believed about it. This means a
+%                    usePWL=false run reports plannedCost from a model
+%                    that is wrong about its own fuel cell, and
+%                    actualCost from what that wrong plan really costs
+%                    once physics is applied -- planned and realized
+%                    cost are expected to diverge here (see Case 5 in
+%                    main_month4a_case_studies.m), unlike the usePWL=true
+%                    case where the planning model matches reality.
 %
 %   Output res:
 %     DA                 : day-ahead solution (dayahead_dispatch.m output)
@@ -44,15 +66,23 @@ function res = simulate_multiscale_day(p, fc, opts)
     if nargin < 3; opts = struct(); end
     if ~isfield(opts,'useIntraday'); opts.useIntraday = true; end
     if ~isfield(opts,'reserveScale'); opts.reserveScale = 1.0; end
+    if ~isfield(opts,'usePWL'); opts.usePWL = true; end
 
     pScaled = p;
     pScaled.reserve.elecLoadFrac = p.reserve.elecLoadFrac * opts.reserveScale;
     pScaled.reserve.solarFrac    = p.reserve.solarFrac    * opts.reserveScale;
     pScaled.reserve.heatLoadFrac = p.reserve.heatLoadFrac * opts.reserveScale;
 
-    DA = dayahead_dispatch(pScaled, fc);
+    pPlan = pScaled;
+    if ~opts.usePWL
+        pPlan.PWL.nSegments = 1;
+        pPlan.PWL.bkpt_e  = pwl_utils('fit', pPlan.PWL.eta_FC_e_func,  pPlan.PWL.FC_H2_max, 1, 'FC_elec_const');
+        pPlan.PWL.bkpt_th = pwl_utils('fit', pPlan.PWL.eta_FC_th_func, pPlan.PWL.FC_H2_max, 1, 'FC_heat_const');
+    end
+
+    DA = dayahead_dispatch(pPlan, fc);
     if DA.status ~= 0
-        error('simulate_multiscale_day:dayahead', 'Day-ahead LP did not solve to optimality (status=%d).', DA.status);
+        error('simulate_multiscale_day:dayahead', 'Day-ahead MILP did not solve to optimality (status=%d).', DA.status);
     end
 
     hourOf5 = ceil((1:288)/12)';
@@ -60,7 +90,7 @@ function res = simulate_multiscale_day(p, fc, opts)
     priceExport5v = fc.DA.priceExport(hourOf5);
 
     if opts.useIntraday
-        res = simulate_closed_loop(pScaled, fc, DA);
+        res = simulate_closed_loop(pPlan, pScaled, fc, DA);
     else
         res = simulate_open_loop(pScaled, fc, DA, hourOf5);
     end
@@ -72,7 +102,11 @@ function res = simulate_multiscale_day(p, fc, opts)
     res.dayaheadPeakImport = max(DA.Pg_imp);
 end
 
-function res = simulate_closed_loop(p, fc, DA)
+function res = simulate_closed_loop(p, pTrue, fc, DA)
+    % p     : planning model (intraday_dispatch's belief -- constant-eff
+    %         1-segment fit when opts.usePWL=false, else identical to pTrue)
+    % pTrue : physical reality (realtime_balance always evaluates the
+    %         fuel cell's committed PH2 through pTrue's curve)
     socRef15 = struct();
     hourGrid = [0; fc.hours];
     socRef15.Batt     = interp1(hourGrid, [p.Batt.SOC0;     DA.SOCbatt'], (1:96)'*0.25, 'linear');
@@ -126,7 +160,7 @@ function res = simulate_closed_loop(p, fc, DA)
         for j = 1:3
             m = (k-1)*3 + j;
             priceImport5 = fc.DA.priceImport(hourOfK); priceExport5 = fc.DA.priceExport(hourOfK);
-            [actual, SOCbatt5loop, infoRT] = realtime_balance(p, SOCbatt5loop, committed, ...
+            [actual, SOCbatt5loop, infoRT] = realtime_balance(pTrue, SOCbatt5loop, committed, ...
                 fc.RT.solar(m), fc.RT.Lelec(m), priceImport5, priceExport5);
             Pg_imp5(m) = actual.Pg_imp; Pg_exp5(m) = actual.Pg_exp; PH2_5(m) = actual.PH2;
             SOCbatt5(m) = SOCbatt5loop;
