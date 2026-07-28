@@ -14,7 +14,21 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
 %   5-minute heat demand is physically absorbed by the buildings' and
 %   pipe network's own thermal inertia rather than requiring an
 %   explicit fast heat correction -- thermal systems do not need
-%   sub-minute balancing the way electricity does.
+%   sub-minute balancing the way electricity does. (There is no
+%   heat-side balance row in this file at all, so the PWL fuel cell
+%   change below has nothing else to touch.)
+%
+%   FUEL CELL PWL EVALUATION (not PWL/MILP): `reference.PH2` is already
+%   a fixed number by the time real-time runs (intraday's committed
+%   total fuel input, decided by dayahead/intraday's own segment+binary
+%   MILP) -- it is not re-optimized here, only converted back to the
+%   electricity it actually produces. The segment-splitter/binary
+%   machinery in dayahead_dispatch.m/intraday_dispatch.m exists to solve
+%   an OPTIMIZATION over an unknown PH2; here PH2 is already known, so
+%   the exact nonlinear curve value is obtained directly via
+%   pwl_utils('eval', ...) (linear interpolation between the same fitted
+%   breakpoints) instead of the old flat p.eta_FC_e multiplier, with no
+%   need for segment variables or ordering binaries.
 %
 %   Minimizes actual energy cost plus a heavy penalty (via L1 slacks)
 %   for deviating grid/battery dispatch away from the intraday reference
@@ -59,7 +73,8 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     c(IDX.Pge) = -priceExport*dt;
     c([IDX.sGiP IDX.sGiN IDX.sGeP IDX.sGeN IDX.sBcP IDX.sBcN IDX.sBdP IDX.sBdN]) = trackWeight;
 
-    fixedElec = p.eta_FC_e*reference.PH2 - reference.Php + reference.Pev_dis - reference.Pev_ch;
+    fcElec = pwl_utils('eval', p.PWL.bkpt_e.x, p.PWL.bkpt_e.y, reference.PH2);
+    fixedElec = fcElec - reference.Php + reference.Pev_dis - reference.Pev_ch;
 
     A = zeros(7, nVar); b = zeros(7,1); ctype = repmat('S',7,1);
     % elec balance: eta_PV*Ps + Pgi - Pge + Pbdis - Pbch + fixedElec = actualLelec

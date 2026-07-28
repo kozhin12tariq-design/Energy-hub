@@ -1,10 +1,10 @@
 function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, evAvailNext, fcNow, fcNextScenarios, scenProb, socRefNow, trackWeight)
-%INTRADAY_DISPATCH Rolling two-stage stochastic LP, 15-minute resolution.
+%INTRADAY_DISPATCH Rolling two-stage stochastic MILP, 15-minute resolution.
 %
 %   [committed, SOCnext, info] = INTRADAY_DISPATCH(p, SOCnow, evAvailNow, ...
 %       evAvailNext, fcNow, fcNextScenarios, scenProb, socRefNow, trackWeight)
 %
-%   Solves ONE small two-stage stochastic LP over a 30-minute look-ahead
+%   Solves ONE small two-stage stochastic program over a 30-minute look-ahead
 %   (the current 15-min slot, "here-and-now", plus the next slot under
 %   several PV/load scenarios), and returns only the current slot's
 %   decision -- classic rolling/receding-horizon dispatch: called again
@@ -20,6 +20,15 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
 %   the stage-1 decision is chosen knowing it must leave every scenario
 %   feasible, not just the average one.
 %
+%   FUEL CELL PWL/MILP EMBEDDING: same segment-splitter + concentrator +
+%   fill-order-binary structure as dayahead_dispatch.m (see that file's
+%   header for the full derivation), applied independently to EVERY
+%   block -- stage 1 and each of the Nscen stage-2 scenarios -- since
+%   each block makes its own fuel cell dispatch decision. PV keeps a
+%   constant efficiency (p.eta_PV) here too; only the fuel cell is
+%   PWL/MILP. This makes the intraday re-solve a genuine MILP rather
+%   than the pure LP it used to be.
+%
 %   Coordination with day-ahead: `socRefNow` is the day-ahead SOC
 %   trajectory interpolated to this slot; a soft (L1, via slack
 %   variables) penalty keeps the intraday storage trajectory close to
@@ -27,7 +36,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
 %   still exploit better near-term information.
 %
 %   Inputs
-%     p               : multiscale_default_params() struct
+%     p               : multiscale_default_params() struct (uses p.PWL.*)
 %     SOCnow           : struct with fields Batt, EV, Building, Pipe (current SOC)
 %     evAvailNow/Next   : EV plugged-in flags for this slot / next slot
 %     fcNow             : struct with fields solar, Lelec, Lheat, priceImport,
@@ -41,7 +50,8 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
 %                         the day-ahead tracking term
 %
 %   Outputs
-%     committed : struct with the stage-1 dispatch (Pg_imp, Pg_exp, PH2,
+%     committed : struct with the stage-1 dispatch (Pg_imp, Pg_exp, PH2
+%                 [= segment total], PH2seg [1 x nSegments, diagnostic],
 %                 Php, Ps, Pbatt_ch, Pbatt_dis, Pev_ch, Pev_dis,
 %                 Pbld_ch, Pbld_dis, Ppipe_ch, Ppipe_dis) for this slot
 %     SOCnext   : struct, storage state at the end of this slot
@@ -50,18 +60,28 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     dt = 0.25; % 15 minutes
     Nscen = numel(fcNextScenarios);
 
-    NV = 17;
-    OFF = struct('Pgi',1,'Pge',2,'PH2',3,'Ps',4, ...
-                  'Bch',5,'Bdis',6,'Ech',7,'Edis',8, ...
-                  'Lch',9,'Ldis',10,'Pch',11,'Pdis',12, ...
-                  'SB',13,'SE',14,'SL',15,'SP',16, 'Php',17);
-    ix = @(block, off) block*NV + off;   % block 0 = stage1, 1..Nscen = stage2 scenarios
+    s = p.PWL.nSegments;
+    bkE = p.PWL.bkpt_e; bkT = p.PWL.bkpt_th;
+    w = diff(bkE.x);              % 1 x s segment widths (shared by both curves)
+    slopeE = diff(bkE.y) ./ w;    % 1 x s electrical slope per segment
+    slopeT = diff(bkT.y) ./ w;    % 1 x s thermal slope per segment
+
+    % Per-block variables: 16 fixed + PH2total(1) + PH2seg(1..s) + u(1..s-1)
+    NV = 16 + 1 + s + (s-1);
+    OFF = struct('Pgi',1,'Pge',2,'Ps',3, ...
+                  'Bch',4,'Bdis',5,'Ech',6,'Edis',7, ...
+                  'Lch',8,'Ldis',9,'Pch',10,'Pdis',11, ...
+                  'SB',12,'SE',13,'SL',14,'SP',15,'Php',16,'PH2tot',17);
+    segBase = 17; uBase = 17 + s;
+    ix    = @(block, off) block*NV + off;   % block 0 = stage1, 1..Nscen = stage2 scenarios
+    ixSeg = @(block, k)   ix(block, segBase+k);
+    ixU   = @(block, k)   ix(block, uBase+k);
     nCore = (1+Nscen)*NV;
     slackOff = struct('B',1,'E',2,'L',3,'P',4); % 4 devices x (pos,neg) = 8 slacks
     ixSlack = @(dev, sign) nCore + (slackOff.(dev)-1)*2 + sign; % sign: 1=pos,2=neg
     nVar = nCore + 8;
 
-    FC_H2_max = 150; GRID_CAP = 1000;
+    GRID_CAP = 1000;
 
     lb = zeros(nVar,1); ub = zeros(nVar,1);
     blocks_fc = [fcNow; fcNextScenarios(:)];
@@ -70,7 +90,6 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         fcb = blocks_fc(blk+1); evb = blocks_evAvail(blk+1);
         ub(ix(blk,OFF.Pgi))  = GRID_CAP;
         ub(ix(blk,OFF.Pge))  = GRID_CAP;
-        ub(ix(blk,OFF.PH2))  = FC_H2_max;
         ub(ix(blk,OFF.Ps))   = fcb.solar;
         ub(ix(blk,OFF.Bch))  = p.Batt.Pch_max;
         ub(ix(blk,OFF.Bdis)) = p.Batt.Pdis_max;
@@ -81,22 +100,29 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         ub(ix(blk,OFF.Pch))  = p.Pipe.Pch_max;
         ub(ix(blk,OFF.Pdis)) = p.Pipe.Pdis_max;
         ub(ix(blk,OFF.Php))  = p.HeatPump.Pmax;
+        ub(ix(blk,OFF.PH2tot)) = bkE.x(end);
         lb(ix(blk,OFF.SB)) = p.Batt.SOCmin;     ub(ix(blk,OFF.SB)) = p.Batt.SOCmax;
         lb(ix(blk,OFF.SE)) = p.EV.SOCmin;       ub(ix(blk,OFF.SE)) = p.EV.SOCmax;
         lb(ix(blk,OFF.SL)) = p.Building.SOCmin; ub(ix(blk,OFF.SL)) = p.Building.SOCmax;
         lb(ix(blk,OFF.SP)) = p.Pipe.SOCmin;     ub(ix(blk,OFF.SP)) = p.Pipe.SOCmax;
+        for k = 1:s
+            ub(ixSeg(blk,k)) = w(k);
+        end
+        for k = 1:(s-1)
+            ub(ixU(blk,k)) = 1;
+        end
     end
     ub(nCore+1 : nVar) = Inf; % slacks
 
     c = zeros(nVar,1);
-    c(ix(0,OFF.Pgi)) =  fcNow.priceImport*dt;
-    c(ix(0,OFF.Pge)) = -fcNow.priceExport*dt;
-    c(ix(0,OFF.PH2)) =  p.price_H2*dt;
-    for s = 1:Nscen
-        fcs = fcNextScenarios(s);
-        c(ix(s,OFF.Pgi)) = scenProb(s) * fcs.priceImport*dt;
-        c(ix(s,OFF.Pge)) = -scenProb(s) * fcs.priceExport*dt;
-        c(ix(s,OFF.PH2)) = scenProb(s) * p.price_H2*dt;
+    c(ix(0,OFF.Pgi))    =  fcNow.priceImport*dt;
+    c(ix(0,OFF.Pge))    = -fcNow.priceExport*dt;
+    c(ix(0,OFF.PH2tot)) =  p.price_H2*dt;
+    for s_ = 1:Nscen
+        fcs = fcNextScenarios(s_);
+        c(ix(s_,OFF.Pgi))    = scenProb(s_) * fcs.priceImport*dt;
+        c(ix(s_,OFF.Pge))    = -scenProb(s_) * fcs.priceExport*dt;
+        c(ix(s_,OFF.PH2tot)) = scenProb(s_) * p.price_H2*dt;
     end
     for dv = {'B','E','L','P'}
         c(ixSlack(dv{1},1)) = trackWeight;
@@ -112,11 +138,14 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         ctypeList(end+1) = type; %#ok<AGROW>
     end
 
-    % Stage-1 balances (this slot)
-    add_row([ix(0,OFF.Ps) ix(0,OFF.PH2) ix(0,OFF.Php) ix(0,OFF.Pgi) ix(0,OFF.Pge) ix(0,OFF.Bdis) ix(0,OFF.Bch) ix(0,OFF.Edis) ix(0,OFF.Ech)], ...
-        [p.eta_PV p.eta_FC_e -1 1 -1 1 -1 1 -1], 'S', fcNow.Lelec);
-    add_row([ix(0,OFF.PH2) ix(0,OFF.Php) ix(0,OFF.Ldis) ix(0,OFF.Lch) ix(0,OFF.Pdis) ix(0,OFF.Pch)], ...
-        [p.eta_FC_th p.HeatPump.COP 1 -1 1 -1], 'S', fcNow.Lheat);
+    % Stage-1 balances (this slot); fuel cell contributes sum_k slope*PH2seg(k)
+    seg0 = arrayfun(@(k) ixSeg(0,k), 1:s);
+    add_row([ix(0,OFF.Ps) seg0 ix(0,OFF.Php) ix(0,OFF.Pgi) ix(0,OFF.Pge) ix(0,OFF.Bdis) ix(0,OFF.Bch) ix(0,OFF.Edis) ix(0,OFF.Ech)], ...
+        [p.eta_PV slopeE -1 1 -1 1 -1 1 -1], 'S', fcNow.Lelec);
+    add_row([seg0 ix(0,OFF.Php) ix(0,OFF.Ldis) ix(0,OFF.Lch) ix(0,OFF.Pdis) ix(0,OFF.Pch)], ...
+        [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcNow.Lheat);
+    add_row([seg0 ix(0,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
+    add_fillorder(0, seg0);
 
     % Stage-1 SOC recursions (from the GIVEN current state SOCnow)
     add_soc(ix(0,OFF.SB), ix(0,OFF.Bch), ix(0,OFF.Bdis), [], [], p.Batt, dt, SOCnow.Batt);
@@ -131,23 +160,31 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     add_row([ix(0,OFF.SP) ixSlack('P',1) ixSlack('P',2)], [1 -1 1], 'S', socRefNow.Pipe);
 
     % Stage-2 balances + SOC recursions (per scenario, branching from stage-1 SOC)
-    for s = 1:Nscen
-        fcs = fcNextScenarios(s);
-        add_row([ix(s,OFF.Ps) ix(s,OFF.PH2) ix(s,OFF.Php) ix(s,OFF.Pgi) ix(s,OFF.Pge) ix(s,OFF.Bdis) ix(s,OFF.Bch) ix(s,OFF.Edis) ix(s,OFF.Ech)], ...
-            [p.eta_PV p.eta_FC_e -1 1 -1 1 -1 1 -1], 'S', fcs.Lelec);
-        add_row([ix(s,OFF.PH2) ix(s,OFF.Php) ix(s,OFF.Ldis) ix(s,OFF.Lch) ix(s,OFF.Pdis) ix(s,OFF.Pch)], ...
-            [p.eta_FC_th p.HeatPump.COP 1 -1 1 -1], 'S', fcs.Lheat);
+    for sc = 1:Nscen
+        fcs = fcNextScenarios(sc);
+        segS = arrayfun(@(k) ixSeg(sc,k), 1:s);
+        add_row([ix(sc,OFF.Ps) segS ix(sc,OFF.Php) ix(sc,OFF.Pgi) ix(sc,OFF.Pge) ix(sc,OFF.Bdis) ix(sc,OFF.Bch) ix(sc,OFF.Edis) ix(sc,OFF.Ech)], ...
+            [p.eta_PV slopeE -1 1 -1 1 -1 1 -1], 'S', fcs.Lelec);
+        add_row([segS ix(sc,OFF.Php) ix(sc,OFF.Ldis) ix(sc,OFF.Lch) ix(sc,OFF.Pdis) ix(sc,OFF.Pch)], ...
+            [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcs.Lheat);
+        add_row([segS ix(sc,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
+        add_fillorder(sc, segS);
 
-        add_soc(ix(s,OFF.SB), ix(s,OFF.Bch), ix(s,OFF.Bdis), ix(0,OFF.SB), 1, p.Batt, dt, []);
-        add_soc(ix(s,OFF.SE), ix(s,OFF.Ech), ix(s,OFF.Edis), ix(0,OFF.SE), 1, p.EV, dt, []);
-        add_soc(ix(s,OFF.SL), ix(s,OFF.Lch), ix(s,OFF.Ldis), ix(0,OFF.SL), 1, p.Building, dt, []);
-        add_soc(ix(s,OFF.SP), ix(s,OFF.Pch), ix(s,OFF.Pdis), ix(0,OFF.SP), 1, p.Pipe, dt, []);
+        add_soc(ix(sc,OFF.SB), ix(sc,OFF.Bch), ix(sc,OFF.Bdis), ix(0,OFF.SB), 1, p.Batt, dt, []);
+        add_soc(ix(sc,OFF.SE), ix(sc,OFF.Ech), ix(sc,OFF.Edis), ix(0,OFF.SE), 1, p.EV, dt, []);
+        add_soc(ix(sc,OFF.SL), ix(sc,OFF.Lch), ix(sc,OFF.Ldis), ix(0,OFF.SL), 1, p.Building, dt, []);
+        add_soc(ix(sc,OFF.SP), ix(sc,OFF.Pch), ix(sc,OFF.Pdis), ix(0,OFF.SP), 1, p.Pipe, dt, []);
     end
 
     A = cell2mat(rows(:));
     b = bvals(:);
     ctype = ctypeList(:);
     vartype = repmat('C', nVar, 1);
+    for blk = 0:Nscen
+        for k = 1:(s-1)
+            vartype(ixU(blk,k)) = 'I';
+        end
+    end
 
     param.msglev = 0;
     [x, fval, status] = glpk(c, A, b, lb, ub, ctype, vartype, 1, param);
@@ -161,7 +198,8 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
 
     committed.Pg_imp = x(ix(0,OFF.Pgi));
     committed.Pg_exp = x(ix(0,OFF.Pge));
-    committed.PH2    = x(ix(0,OFF.PH2));
+    committed.PH2    = x(ix(0,OFF.PH2tot));
+    committed.PH2seg = x(seg0)';
     committed.Php    = x(ix(0,OFF.Php));
     committed.Ps     = x(ix(0,OFF.Ps));
     committed.Pbatt_ch  = x(ix(0,OFF.Bch));  committed.Pbatt_dis  = x(ix(0,OFF.Bdis));
@@ -173,6 +211,28 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     SOCnext.EV       = x(ix(0,OFF.SE));
     SOCnext.Building = x(ix(0,OFF.SL));
     SOCnext.Pipe     = x(ix(0,OFF.SP));
+
+    % Verification gate (mirrors dayahead_dispatch.m): segment fill order
+    % must be physically valid in every block (stage 1 + every scenario).
+    tol = 1e-6;
+    for blk = 0:Nscen
+        segvals = x(arrayfun(@(k) ixSeg(blk,k), 1:s));
+        for k = 1:(s-1)
+            if segvals(k+1) > tol && segvals(k) < w(k) - 1e-4
+                error('intraday_dispatch:fillorder', ...
+                    ['Segment fill-order violated in block %d: PH2seg(%d)=%.6f > 0 ' ...
+                     'while PH2seg(%d)=%.6f < w(%d)=%.6f (not full).'], ...
+                    blk, k+1, segvals(k+1), k, segvals(k), k, w(k));
+            end
+        end
+    end
+
+    function add_fillorder(blk, segIdx)
+        for k = 1:(s-1)
+            add_row([segIdx(k+1) ixU(blk,k)], [1 -w(k+1)], 'U', 0);
+            add_row([segIdx(k)   ixU(blk,k)], [-1 w(k)],   'U', 0);
+        end
+    end
 
     function add_soc(socIdx, chIdx, disIdx, prevSocIdx, prevCoef, dev, dtLocal, socPrevConst)
         coefsI = [socIdx, chIdx, disIdx];

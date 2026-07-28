@@ -11,7 +11,7 @@ function res = simulate_multiscale_day(p, fc, opts)
 %   opts (all optional, defaults reproduce main_multiscale_dispatch.m):
 %     useIntraday  : true  (default) -> full day-ahead + rolling
 %                    intraday(15-min) + real-time(5-min) closed loop.
-%                    false -> OPEN LOOP: only the day-ahead LP is
+%                    false -> OPEN LOOP: only the day-ahead MILP is
 %                    solved; its hourly setpoints are held FIXED and
 %                    repeated across each hour's twelve 5-min sub-steps,
 %                    executed against the ACTUAL realized fc.RT data
@@ -160,7 +160,14 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
         Ps_m = min(DA.Ps(h), fc.RT.solar(m));
         PH2_5(m) = DA.PH2(h);
 
-        fixedElec = p.eta_PV*Ps_m + p.eta_FC_e*DA.PH2(h) - DA.Php(h) ...
+        % Fuel cell electricity from the held-fixed day-ahead PH2 total is
+        % evaluated through the exact PWL curve (pwl_utils('eval', ...)),
+        % same reasoning as realtime_balance.m: PH2 is already a known,
+        % fixed number here (the day-ahead plan), not re-optimized, so a
+        % flat p.eta_FC_e multiplier would silently mismatch what the
+        % day-ahead MILP actually produced from that fuel level.
+        fcElec = pwl_utils('eval', p.PWL.bkpt_e.x, p.PWL.bkpt_e.y, DA.PH2(h));
+        fixedElec = p.eta_PV*Ps_m + fcElec - DA.Php(h) ...
             + DA.Pbatt_dis(h) - DA.Pbatt_ch(h) + DA.Pev_dis(h) - DA.Pev_ch(h);
         Pnet = fc.RT.Lelec(m) - fixedElec;
         Pg_imp5(m) = max(Pnet, 0);
