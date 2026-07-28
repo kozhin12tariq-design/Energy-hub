@@ -236,3 +236,180 @@ tail from `nSegments=10` onward.
 
 No file was reorganized, moved, renamed, merged, or split. No file
 outside this list was modified.
+
+---
+
+# Follow-up session — three defects from independent verification
+
+A later review (`claude_code_prompt_v3.md`) found three defects. Two
+were **wrong explanatory prose printed next to correct numbers**; one
+was scenario framing. No optimization model, MILP formulation, PWL
+segment structure, fill-order binary, or solver call was touched.
+
+## Protected numbers — re-verified after all three fixes
+
+| Check | Value | Status |
+|---|---|---|
+| Case 1 Conventional | $176.37, 366.1 kgCO2, 45.6 kW peak | unchanged |
+| Case 2 Day-ahead only | $50.61, 157.0 kgCO2, 105.1 kW, 0.11 kWh, 0.25 h | unchanged |
+| Case 3 No robust reserve | $50.49, 147.9 kgCO2, 105.5 kW, 0.54 kWh, 0.42 h | unchanged |
+| Case 4 Full proposed | $49.74, 147.9 kgCO2, 103.8 kW, 0.00 kWh, 0.00 h | unchanged |
+| Case 5 realized-cost comparison | constant efficiency costs **1.47% more** than PWL | unchanged |
+| IEEE 33-bus losses / min voltage | 202.677 kW / 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data.m` assertions | 3715 kW / 2300 kVAr | pass |
+| Month 4b reserve + uncertainty sweeps | all rows | unchanged |
+| Fill-order assertion, normal runs | silent | unchanged |
+| Fill-order assertion, LP relaxation | fires: `PH2seg(2)=4.576272 > 0 while PH2seg(1)=4.576272 < w(1)=30` | still fires |
+| All seven `main_month*.m` | run end-to-end | pass |
+
+Every sweep value in `main_month4c_pwl_segment_sweep.m` (Planned,
+Realized, Gap, and all four curve-fit error columns) is also identical
+to the pre-fix run; only wall-clock solve times vary, as timing noise.
+
+## Fix 1 — Case 5's explanation contradicted its own table
+
+**What was wrong.** The printed paragraph claimed the
+constant-efficiency row had *"a second, modeling-driven source of
+planned-vs-realized divergence on top of that same forecast mismatch"* —
+i.e. that it should show a **larger** planned-vs-actual gap. The table
+printed immediately above it showed the opposite: constant efficiency
+4.27%, PWL 10.15%. The numbers were right; the explanation was the bug.
+
+**The corrected explanation.** The paragraph's implicit premise — *wrong
+model ⇒ bigger gap* — is false. The planned-vs-actual gap is not a
+measure of model quality: it mixes forecast error with modeling error,
+and the modeling component carries a **sign**. It widens the gap only if
+the planning model is *optimistic* about the fuel cell, and **narrows**
+it if the model is *pessimistic*.
+
+Here the constant-efficiency planning model is a single chord of slope
+**0.3700**, while the true curve's marginal slopes over the segments the
+fuel cell actually dispatches in are **0.4453 / 0.5078 / 0.4578** — all
+above it. That model therefore systematically *under*-states its own
+fuel cell: it plans a higher cost ($37.17 vs $34.68), reality comes in
+better than planned, and that credit partially cancels the
+forecast-driven overrun instead of adding to it. A pessimistic wrong
+model can thus look *better* on this statistic than a correct one, which
+is exactly why the gap cannot rank models and why the realized-cost
+comparison — both variants evaluated against the one true curve — is the
+correct isolating measure. Every slope quoted in the new prose is
+computed from the fitted breakpoints, not hardcoded.
+
+**New diagnostic.** An `Optimism` column was added to the Case 5 table:
+the electricity the planning model believed its own committed fuel would
+produce, minus what the true curve really produces from that same fuel,
+per kW of fuel, fuel-weighted over the day. It is deliberately an
+aggregate — a per-point chord ratio is distorted by near-zero dispatch
+intervals, where dividing by a vanishing fuel value blows up (an early
+per-point version reported a spurious +0.0359 for the PWL variant for
+exactly this reason).
+
+| Case 5 variant | Optimism | Gap(%) |
+|---|---|---|
+| PWL (correct model) | +0.0060 (neutral) | 10.15 — near-pure forecast error |
+| Constant efficiency | −0.0897 (pessimistic) | 4.27 — pessimism offsets the overrun |
+
+## Fix 2 — the `nSegments=2` gap outlier was underexplained
+
+**What was wrong.** The sweep reports a **+24.80%** gap at
+`nSegments=2`, worse than `nSegments=1`'s −4.36%, inside a table meant
+to demonstrate convergence. The prior text explained this only
+generically ("each nSegments value gives the MILP a genuinely different
+feasible region") — directionally true, but it never identified why one
+coarse model lands positive and the other negative.
+
+**The corrected explanation.** It is the *same* optimism/pessimism
+mechanism as Fix 1, with the opposite sign. What matters is not how
+accurate a coarse model is, but whether it errs high or low where the
+fuel cell actually operates:
+
+- **n=1**: chord slope 0.3700, below the true marginal slopes in the
+  dispatched range → **pessimistic** (Optimism −0.1018) → plans high,
+  reality beats the plan → gap **negative** (−4.36%).
+- **n=2**: a single slope 0.4775 spanning 0–75 kW, versus the true
+  curve's own 0.4453 over the first 30 kW of that span. The true curve
+  is convex there (verified: `y''>0` for `u<≈0.36`; at the midpoint the
+  chord gives 17.906 kW against 17.156 kW true), so the chord sits
+  **above** the curve in between → **optimistic** (Optimism +0.0058) →
+  over-dispatches, reality under-delivers → gap **positive** (+24.80%).
+
+Adding a segment improved *every* curve-fit metric yet made the gap far
+worse, purely by flipping the sign of the modeling error. This turns two
+apparent anomalies into one consistent effect, and the text now
+cross-references Case 5.
+
+**Sign is predictive; magnitude is not.** The sign of `Optimism` matches
+the sign of `Gap(%)` in **all six rows**:
+
+| nSegments | 1 | 2 | 5 | 10 | 20 | 36 |
+|---|---|---|---|---|---|---|
+| Optimism | −0.1018 | +0.0058 | −0.0025 | −0.0004 | −0.0002 | −0.0001 |
+| Gap(%) | −4.36 | +24.80 | −0.12 | −0.02 | −0.01 | −0.00 |
+
+Magnitude is explicitly *not* claimed to scale: n=1 has by far the
+largest |Optimism| yet a small gap, n=2 the reverse. A shortfall must be
+covered at the $0.10–$0.32/kWh import price while a surplus is only
+worth the $0.05/kWh export price, so optimism is punished harder than
+pessimism is rewarded, and the re-dispatch itself differs per row. The
+`Optimism` column reuses the two vectors the realized-cost step already
+computes, so it adds no computation and cannot perturb the table. The
+existing (correct) point that the **curve-fit error columns** are the
+decision-independent measure of PWL accuracy is retained.
+
+## Fix 3 — hydrogen price reframed as two named, sourced scenarios
+
+**What was wrong.** Under the default price the fuel cell never runs, so
+Month 3's headline reported `FC fuel = 0` while Case 5 and the segment
+sweep both overrode to $0.06 to force activity. The code was honest that
+this was pre-existing economics, but it read as an arbitrary workaround
+and left the obvious examiner question unanswered: if the central
+contribution never engages in the base case, what is it contributing?
+
+**The corrected framing.** The two prices are defensible endpoints of
+real hydrogen economics, now named in `multiscale_default_params.m` and
+quoted per kg as well as per kWh. Conversion uses hydrogen's lower
+heating value, 120 MJ/kg = 33.3 kWh/kg (verified by arithmetic:
+0.22 × 33.3 = $7.33/kg; 0.06 × 33.3 = $2.00/kg):
+
+| Scenario | $/kWh | $/kg | Anchor |
+|---|---|---|---|
+| `H2_today` (default) | 0.22 | 7.33 | Clean hydrogen delivered today. DOE puts renewable-sourced hydrogen near $5/kg at the production gate; compression, storage, transport and dispensing put delivered cost above that. |
+| `H2_doeTarget` | 0.06 | 2.00 | DOE interim 2026 clean-hydrogen target (Clean Hydrogen Electrolysis Program, BIL), en route to the Hydrogen Shot goal of $1/kg by 2031 ("1 1 1": $1 per 1 kg in 1 decade, launched June 2021). |
+
+Both DOE figures were checked against energy.gov rather than asserted
+from memory. `p.price_H2` still defaults to `H2_today`, so nothing moves.
+
+**Result.** `main_month3_multiscale_dispatch.m` now runs the stack at
+both prices, changing only `p.price_H2`, and prints them side by side:
+
+| | H2_today | H2_doeTarget |
+|---|---|---|
+| Hydrogen price | $0.22/kWh ($7.33/kg) | $0.06/kWh ($2.00/kg) |
+| Day-ahead FC fuel | 0 kWh | 339 kWh |
+| Hours FC running (of 24) | 0 | 5 |
+| Day-ahead grid import | 363 kWh | 143 kWh |
+| Emissions | 147.9 kgCO2 | 106.6 kgCO2 |
+
+At today's delivered cost the fuel cell is uneconomic against grid
+import and the optimizer correctly leaves it off — the right economic
+answer, not a broken component. At the DOE target it runs 5 h/day,
+cutting day-ahead grid import 61% and emissions 28%. Critically it runs
+at **37–55% of rated fuel input** — part load, never the rated point a
+nameplate efficiency is calibrated to — which is precisely the regime
+where a constant efficiency is least accurate and where the PWL/MILP
+formulation contributes. The two scenarios together answer "what is the
+PWL model for?": it is inert at today's prices because the component it
+describes is inert, and becomes load-bearing exactly when hydrogen gets
+cheap enough to dispatch.
+
+## Files touched (by fix)
+
+- **Fix 1**: `main_month4a_case_studies.m`
+- **Fix 2**: `main_month4c_pwl_segment_sweep.m`
+- **Fix 3**: `multiscale_default_params.m`,
+  `main_month3_multiscale_dispatch.m`, `main_month4a_case_studies.m`,
+  `main_month4c_pwl_segment_sweep.m`, `README.md`
+
+Again, no file was reorganized, moved, renamed, merged, or split, and
+no optimization model, MILP formulation, PWL segment structure,
+fill-order binary, or solver call was changed.
