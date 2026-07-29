@@ -550,3 +550,192 @@ Confirmed unchanged (timing columns excluded, being machine noise):
 No file was reorganized, moved, renamed, merged, or split, and no
 optimization model, MILP formulation, PWL segment structure, or
 fill-order binary was changed.
+
+---
+
+# Fixes 5–8 — realism and framing
+
+Four issues found while reviewing the full run output. Three are
+presentation/honesty fixes; **Fix 6 is a genuine methodological weakness**
+and is the only one that changed a reported number. No efficiency value,
+device rating, price or emission factor was changed in any of them.
+
+## Protected values — re-verified after all four
+
+| Check | Value | Status |
+|---|---|---|
+| Cases 1–4 **cost / CO2 / peak** | $176.37 / $50.61 / $50.49 / $49.74; 366.1 / 157.0 / 147.9 / 147.9 kg; 45.6 / 105.1 / 105.5 / 103.8 kW | unchanged |
+| Case 5 PWL benefit | 0.20% delivered / 1.47% gate | unchanged |
+| Segment sweep, all columns | n=1 gap −4.36%, n=2 gap +24.80%, Optimism −0.1018 / +0.0058 | unchanged |
+| IEEE 33-bus | 202.677 kW, 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data.m` assertions | 3715 kW / 2300 kVAr | pass |
+| Fill-order, normal runs (both target prices) | silent | pass |
+| Fill-order, LP relaxation | fires: `PH2seg(2)=4.576272 > 0 while PH2seg(1)=4.576272 < w(1)=30` | still fires |
+| All seven `main_month*.m` | run end-to-end | pass |
+
+Only `unmetE` and `violHrs` moved, and only in Fix 6 — by construction,
+as shown below.
+
+## Fix 5 — `eta_PV = 0.97` was labelled as something physically absurd
+
+**What was wrong.** The Month 1 graph output read literally as *"a PV
+array converts the solar resource at 100%, and the whole
+solar→electricity chain runs at 97%"*:
+
+```
+e1: Solar_in -> PV_out    eta=1.000  PV1: solar resource -> PV array
+e2: PV_out -> Elec_Bus    eta=0.970  PV1: PV array output -> elec bus
+```
+
+Real PV modules convert 15–22%, so this stops any reader with a PV
+background immediately.
+
+**The value is correct and unchanged.** `forecast_profiles.m` defines
+`solar_DA = max(0, 50*sin(...))`, already the array's **DC electrical
+output** (a ~50 kW-peak array), not irradiance. So 0.97 is correctly an
+**inverter/DC-DC converter** efficiency applied to power that has already
+been generated. Only the naming misrepresented the model boundary.
+
+**Changed (naming and comments only):** node `Solar_in` → `PV_DC_in`;
+edge descriptions now read "PV array DC output → inverter input" and
+"inverter DC→AC → electrical bus (converter eff.)"; `eta_PV` comments in
+both parameter files state it is the inverter efficiency and that
+module-level solar→DC conversion (~15–22%) is upstream of the boundary
+and embedded in the solar profile; `forecast_profiles.m` gains a MODEL
+BOUNDARY note; `README.md` gains a matching note.
+
+The input **label** `P_solar_<name>` was deliberately left alone — it is
+string-matched in six call sites across Months 1–2, and the brief's own
+instruction was not to break anything for the sake of a rename.
+
+## Fix 6 — the reliability threshold was derived from the case it scored
+
+**What was wrong.** `feederCap = feederCapMargin * C4.dayaheadPeakImport`
+— Case 4's **own** day-ahead peak. Case 4 then scored 0.00 violations
+while Cases 2 and 3 breached it. The metric on which the proposed system
+wins was measured against a threshold the proposed system defined.
+`main_month4b` did the same against its own nominal design point.
+
+**Why this was low-risk, verified before and after.** `feeder_capacity.m`
+is consumed **only** by `reliability_check.m`, after every case has been
+simulated. It never enters `simulate_multiscale_day` or any dispatch
+constraint, so it **cannot** move cost, CO2 or peak — only `unmetE` and
+`violHrs`. Confirmed: Cases 1–4 cost/CO2/peak byte-identical; month4b
+costs identical ($42.18→$45.06 planned, $49.86→$47.96 actual).
+
+**New basis (default).** Sized the way a real connection is sized, from
+connected load and nameplate ratings only:
+
+```
+cap = diversityFactor x (peak elec demand + EV charger
+                         + battery charger + heat pump)
+    = 0.85 x 123.0 kW = 104.55 kW
+```
+
+Every term is exogenous. The 0.85 diversity factor is justified by load
+composition — few large controllable loads, so high coincidence — not by
+the answer it produces. `'case4'` is retained for side-by-side comparison.
+
+**Reliability under both bases:**
+
+| Case | design `unmetE` | design `violHrs` | case4 `unmetE` | case4 `violHrs` |
+|---|---|---|---|---|
+| 2: Day-ahead only | 0.04 | 0.17 | 0.11 | 0.25 |
+| 3: No robust reserve | 0.39 | 0.42 | 0.54 | 0.42 |
+| 4: Full proposed | 0.00 | 0.00 | 0.00 | 0.00 |
+
+**Does Case 4's advantage survive the independent threshold? YES** — 0.00
+violation hours against 0.17 and 0.42.
+
+**But the verdict is knife-edge, and the output says so.** The three
+realized peaks (105.07 / 105.51 / 103.76 kW) lie within 1.75 kW, so Case
+4 is the only clean case for caps in **[103.76, 105.07) kW** — a 1.31 kW
+window, ~1.3% of the peak. Below 103.76 kW all three violate; at or above
+105.51 kW none do. The output also flags that the design cap lands inside
+that window, and that a lower diversity factor (0.75–0.80 → 92–98 kW)
+would put all three in violation.
+
+**What is robust is the ORDERING of unmet energy**, not the zero: Case 4
+lowest and Case 3 highest at *every* swept threshold where anything
+violates — including 90 and 95 kW, where the binary violation count stops
+separating them entirely. That ranking is the defensible reliability
+claim, and the script now says so.
+
+## Fix 7 — building thermal storage is inert; the roadmap claims it as flexibility
+
+**What was wrong.** Month 3 reported Building SOC 0.050–0.391 against
+Pipe 0.050–0.938 without comment, while the roadmap deliverable claims
+*both* building inertia and pipe storage as flexibility mechanisms. By
+energy actually cycled — the honest metric, since a device can move once
+and then sit still — the building contributes **0.26 kWh/day** against the
+pipe's **72.38 kWh/day**, a factor of ~273.
+
+**Diagnosis: displaced, not incapable.** The pipe dominates on every axis:
+
+| Metric | Building | Pipe |
+|---|---|---|
+| Energy cycled (kWh/day) | 0.26 | 72.38 |
+| Capacity (kWh) | 30.0 | 80.0 |
+| Round-trip efficiency | 0.846 | 0.941 |
+| Retention over 6 h | 0.377 | 0.783 |
+| 6 h shift effectiveness | 0.319 | 0.736 |
+
+Both sit on the same heat bus, so a cost-minimizing optimizer routes
+essentially all thermal shifting through the better store. That is
+correct behaviour, not a modelling failure.
+
+**Proven by counterfactual, not asserted.** Disabling the pipe and
+re-solving, the building immediately swings its full **0.050–0.950** range
+and cycles **28.1 kWh/day**. Ruled out as causes: raising its
+charge/discharge limit 10→20 kW moves the SOC range by 0.001 (power never
+binds), and a comfort-band sweep (2/4/6/8/10 °C) shows even a 10 °C band
+at 150 kWh — larger than the pipe — still cycles only ~2 kWh/day.
+Capacity was never the constraint; competition was.
+
+**Explicitly not done:** inflating the 30 kWh figure to make the
+component look useful. It is physically reasoned (C_th 15 kWh/°C × a 2 °C
+comfort band) and is stated as such in the output. The generalizable
+finding — building thermal inertia is worth modelling when it is the
+*principal* thermal store, not when it sits alongside a well-insulated
+district network several times its size — is printed next to the SOC
+ranges.
+
+## Fix 8 — the 71.8% headline measures equipment, not modelling
+
+**What was wrong.** Case 1 is grid plus a gas boiler with **no PV at
+all**; Case 4 has ~412 kWh/day of free solar plus a battery, EV fleet and
+heat pump. Most of the 71.8% cost / 59.6% CO2 reduction is the value of
+*owning that equipment*, not the contribution of the energy-hub modelling
+this thesis is about — any competently dispatched system with the same
+hardware would capture most of it. The script was already explicit about
+the peak-import increase and about Case 4 serving more load; it is now
+equally explicit here.
+
+**What is printed now**, directly beneath the two figures: what they
+compare, that quoting them as a result of the modelling would be a
+category error, and the numbers that *do* isolate this thesis's
+contributions — all already computed, and appropriately smaller:
+
+| Contribution | Isolated by | Value |
+|---|---|---|
+| Rolling intraday/real-time layers | Case 2 vs 4 | **+1.8%** |
+| Robust reserve margin | Case 3 vs 4 | **+1.5%** |
+| PWL vs constant efficiency | Case 5 | **0.20–1.47%** (utilization-dependent) |
+
+`README.md` carries the same caveat, and its Month 4 reliability
+paragraph — which still described the superseded Case-4-derived cap and
+quoted pre-Fix-6 figures — was brought up to date at the same time.
+
+## Files touched (Fixes 5–8)
+
+- **Fix 5**: `hub_component.m`, `energy_hub_default_params.m`,
+  `multiscale_default_params.m`, `forecast_profiles.m`, `README.md`
+- **Fix 6**: `feeder_capacity.m` (new), `multiscale_default_params.m`,
+  `main_month4a_case_studies.m`, `main_month4b_sensitivity_analysis.m`
+- **Fix 7**: `main_month3_multiscale_dispatch.m`
+- **Fix 8**: `main_month4a_case_studies.m`, `README.md`
+
+No file was reorganized, moved, renamed, merged, or split; no
+optimization model, MILP formulation, PWL segment structure or
+fill-order binary was changed; and no efficiency, rating, price or
+emission-factor value was changed.
