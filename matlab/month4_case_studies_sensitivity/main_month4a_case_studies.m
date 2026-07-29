@@ -112,12 +112,24 @@ C3 = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', 
 fprintf('Running Case 4 (energy hub, full proposed system)...\n');
 C4 = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', 1.0));
 
-feederCap = p.reliability.feederCapMargin * C4.dayaheadPeakImport;
-fprintf('\nShared feeder capacity for reliability checks (cases 2-4): %.2f kW\n', feederCap);
+% Reliability threshold. feeder_capacity.m is consumed ONLY by
+% reliability_check below, AFTER every case has been simulated -- it never
+% enters simulate_multiscale_day or any dispatch constraint, so the choice
+% of basis cannot move any case's cost, CO2 or peak. It can only move
+% unmetE and violHrs. Both bases are computed so the reader can see whether
+% the Case 4 advantage survives a threshold Case 4 did not define.
+[feederCap, capLabel]         = feeder_capacity(p, fc, 'design');
+[feederCapC4, capLabelC4]     = feeder_capacity(p, fc, 'case4', C4.dayaheadPeakImport);
+fprintf('\nFeeder capacity, DEFAULT basis : %.2f kW  [%s]\n', feederCap, capLabel);
+fprintf('Feeder capacity, comparison basis: %.2f kW  [%s]\n', feederCapC4, capLabelC4);
 
 V2 = reliability_check(C2.Pg_imp5, C2.Pg_exp5, feederCap);
 V3 = reliability_check(C3.Pg_imp5, C3.Pg_exp5, feederCap);
 V4 = reliability_check(C4.Pg_imp5, C4.Pg_exp5, feederCap);
+
+V2c4 = reliability_check(C2.Pg_imp5, C2.Pg_exp5, feederCapC4);
+V3c4 = reliability_check(C3.Pg_imp5, C3.Pg_exp5, feederCapC4);
+V4c4 = reliability_check(C4.Pg_imp5, C4.Pg_exp5, feederCapC4);
 
 cases = {'1: Conventional', '2: Day-ahead only', '3: No robust reserve', '4: Full proposed'};
 cost = [C1.actualCost, C2.actualCost, C3.actualCost, C4.actualCost];
@@ -134,6 +146,78 @@ for i = 1:4
         fprintf('%-24s %10.2f %12.1f %10.1f %14.2f %12.2f\n', cases{i}, cost(i), emis(i), peak(i), unmetE(i), violHrs(i));
     end
 end
+
+%% Reliability under both threshold bases -----------------------------
+fprintf('\n--- Reliability under BOTH capacity bases (cost/CO2/peak unaffected) ---\n');
+fprintf('The reliability threshold is the one metric whose basis is a methodological\n');
+fprintf('choice, so both are shown. Cost, CO2 and peak above cannot move with it:\n');
+fprintf('feeder_capacity.m feeds only reliability_check.m, after all cases are solved.\n\n');
+fprintf('%-24s %11s %10s   %11s %10s\n', '', 'design', '', 'case4-derived', '');
+fprintf('%-24s %11s %10s   %11s %10s\n', 'Case', 'UnmetE', 'ViolHrs', 'UnmetE', 'ViolHrs');
+relNames = {'2: Day-ahead only', '3: No robust reserve', '4: Full proposed'};
+Vd = {V2, V3, V4}; Vc = {V2c4, V3c4, V4c4};
+for i = 1:3
+    fprintf('%-24s %11.2f %10.2f   %11.2f %10.2f\n', relNames{i}, ...
+        Vd{i}.unmetEnergy_kWh, Vd{i}.violationHours, ...
+        Vc{i}.unmetEnergy_kWh, Vc{i}.violationHours);
+end
+
+%% Threshold sensitivity ----------------------------------------------
+% The three cases' realized peaks differ by under 2 kW, so the binary
+% "violations vs. no violations" verdict is inherently threshold-sensitive.
+% Sweep it rather than assert a single number.
+fprintf('\n--- Threshold sensitivity (violation hours; realized peaks C2/C3/C4 = %.2f/%.2f/%.2f kW) ---\n', ...
+    max(C2.Pg_imp5), max(C3.Pg_imp5), max(C4.Pg_imp5));
+capSweep = [90 95 100 feederCap feederCapC4 106 110];
+capSweep = sort(unique(round(capSweep*100)/100));
+fprintf('%10s %10s %10s %10s   %s\n', 'cap(kW)', 'C2', 'C3', 'C4', 'unmetE C2/C3/C4 (kWh)');
+for cc = capSweep
+    v2 = reliability_check(C2.Pg_imp5, C2.Pg_exp5, cc);
+    v3 = reliability_check(C3.Pg_imp5, C3.Pg_exp5, cc);
+    v4 = reliability_check(C4.Pg_imp5, C4.Pg_exp5, cc);
+    fprintf('%10.2f %10.2f %10.2f %10.2f   %.2f / %.2f / %.2f\n', cc, ...
+        v2.violationHours, v3.violationHours, v4.violationHours, ...
+        v2.unmetEnergy_kWh, v3.unmetEnergy_kWh, v4.unmetEnergy_kWh);
+end
+
+if V4.violationHours < min(V2.violationHours, V3.violationHours)
+    survives = 'YES';
+else
+    survives = 'NO';
+end
+% Exact window in which Case 4 is the ONLY case inside the limit:
+% caps >= Case 4's own peak but below the next-lowest peak.
+pk4      = max(C4.Pg_imp5);
+pkOthers = min(max(C2.Pg_imp5), max(C3.Pg_imp5));
+pkAll    = max(max(C2.Pg_imp5), max(C3.Pg_imp5));
+pkSpread = pkAll - pk4;
+fprintf(['\nDoes Case 4''s reliability advantage survive an independently-set threshold? %s.\n' ...
+    'Under the design-basis cap (%.2f kW, built only from load and nameplate ratings --\n' ...
+    'no dispatch strategy involved) Case 4 still records %.2f violation hours against\n' ...
+    '%.2f and %.2f for Cases 2 and 3.\n' ...
+    '\nBut the sweep above shows how NARROW that verdict is, and this qualification\n' ...
+    'belongs with the result: the three cases'' realized peaks lie within %.2f kW of each\n' ...
+    'other, so Case 4 is the ONLY case inside the limit just for caps in [%.2f, %.2f) kW\n' ...
+    '-- a window %.2f kW wide, about %.1f%% of the peak itself. Set the cap below %.2f kW\n' ...
+    'and Case 4 violates too; set it at or above %.2f kW and NONE of them violate. The\n' ...
+    'binary "zero violations" headline is therefore an artifact of where the line is\n' ...
+    'drawn, and should not be quoted on its own.\n' ...
+    '\nIn fairness the design cap (%.2f kW) does land inside that narrow window, and it\n' ...
+    'is only fair to flag that rather than let it pass: the diversity factor (%.2f) was\n' ...
+    'chosen from the load composition -- few large controllable loads, so high\n' ...
+    'coincidence -- and NOT reverse-engineered from the answer, but a lower factor would\n' ...
+    'change the verdict. At 0.75-0.80 the cap falls to roughly 92-98 kW and, as the sweep\n' ...
+    'shows, ALL THREE cases then violate. The reader should treat "Case 4 alone is clean"\n' ...
+    'as conditional on a connection contracted tightly around the system''s own peak.\n' ...
+    '\nWhat IS robust is the ORDERING of unmet energy: at every cap in the sweep where\n' ...
+    'anything violates at all, Case 4 has the lowest unmet energy and Case 3 (no robust\n' ...
+    'reserve) the highest -- including at 90 and 95 kW, where all three breach the limit\n' ...
+    'and the binary violation count no longer separates them at all. That ranking holds\n' ...
+    'across the whole range rather than at one threshold, so it -- not the zero -- is the\n' ...
+    'defensible reliability claim.\n'], ...
+    survives, feederCap, V4.violationHours, V2.violationHours, V3.violationHours, ...
+    pkSpread, pk4, pkOthers, pkOthers - pk4, 100*(pkOthers - pk4)/pk4, pk4, pkAll, ...
+    feederCap, p.reliability.diversityFactor);
 
 fprintf('\n--- Improvements relative to Case 1 (conventional) ---\n');
 fprintf('Case 4 cost reduction: %.1f%%\n', 100*(cost(1)-cost(4))/cost(1));

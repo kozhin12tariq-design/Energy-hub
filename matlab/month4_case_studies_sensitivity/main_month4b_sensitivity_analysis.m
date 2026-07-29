@@ -42,8 +42,19 @@ fprintf(' Reference feeder capacity (nominal design point)\n');
 fprintf('=====================================================\n');
 fcNominal = forecast_profiles(42, 1.0);
 Cnominal = simulate_multiscale_day(p, fcNominal, struct('useIntraday', true, 'reserveScale', 1.0));
-feederCap = p.reliability.feederCapMargin * Cnominal.dayaheadPeakImport;
-fprintf('Feeder capacity (fixed for this whole script): %.2f kW\n', feederCap);
+
+% Capacity basis: 'design' (default) sizes the connection from connected
+% load and nameplate ratings only -- see feeder_capacity.m. The previous
+% behaviour sized it from the NOMINAL DESIGN POINT's own day-ahead peak,
+% which meant the reserveScale=1 run that anchors this script also defined
+% the threshold every other reserveScale was then judged against. Both are
+% printed so the shift is visible; the sweeps below use the design basis.
+[feederCap, capLabel] = feeder_capacity(p, fcNominal, 'design');
+[feederCapSelf, capLabelSelf] = feeder_capacity(p, fcNominal, 'case4', Cnominal.dayaheadPeakImport);
+fprintf('Feeder capacity (fixed for this whole script): %.2f kW  [%s]\n', feederCap, capLabel);
+fprintf('  (previous self-derived basis, for reference: %.2f kW  [%s])\n', feederCapSelf, capLabelSelf);
+fprintf(['  The threshold feeds reliability_check only, never the dispatch, so this\n' ...
+    '  choice moves unmetE/violHrs and cannot move any cost figure below.\n']);
 
 %% 1) Reserve-margin sweep --------------------------------------------------
 fprintf('\n=====================================================\n');

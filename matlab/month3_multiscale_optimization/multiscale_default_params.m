@@ -240,12 +240,35 @@ function p = multiscale_default_params()
     p.Boiler.co2Gas   = 0.20;   % kgCO2/kWh fuel (natural gas combustion)
 
     % Reliability check: assumed contracted feeder import/export capacity
-    % (main_case_studies.m / reliability_check.m), expressed as a
-    % multiple of the FULL system's (Case 4) day-ahead peak import.
-    % margin=1.0 models a capacity contracted EXACTLY to the submitted
-    % day-ahead schedule with no slack -- a realistic demand-charge /
-    % capacity-market scenario, and deliberately tight enough that
-    % coordination and robustness failures (Cases 2-3) show up as actual
-    % violations rather than being absorbed by generous headroom.
-    p.reliability.feederCapMargin = 1.0;
+    % (main_month4a/4b + reliability_check.m). HOW THIS THRESHOLD IS SET
+    % MATTERS METHODOLOGICALLY, so it is an explicit switch rather than a
+    % hardcoded rule:
+    %
+    %   'design' (DEFAULT) -- capacity sized the way a real connection is
+    %       sized: from the installation's own CONNECTED LOAD and a
+    %       diversity factor, both exogenous inputs. Nothing about any
+    %       dispatch STRATEGY enters it, so no case is scored against a
+    %       threshold it defined. This is the honest basis and is the
+    %       default.
+    %   'case4' -- the previous behaviour: feederCapMargin x Case 4's own
+    %       day-ahead peak import. Retained ONLY so the two can be
+    %       compared side by side, because it is self-favourable: it
+    %       measures the proposed system against a line the proposed
+    %       system draws. main_month4a prints both.
+    %
+    % Design basis = diversityFactor x (peak electrical demand + EV
+    % charger + battery charger + heat pump nameplate ratings). The
+    % non-coincident sum is what the connection must physically be able
+    % to serve; the diversity factor is standard LV practice recognising
+    % that not every load peaks simultaneously. 0.85 is a mid-to-high
+    % value appropriate here because this hub aggregates only a FEW LARGE
+    % controllable loads (one EV depot, one battery, one heat pump)
+    % rather than many small independent ones -- coincidence is high when
+    % there is little to average over. The factor is justified by the
+    % load composition, not chosen to produce a particular reliability
+    % result; main_month4a additionally sweeps the threshold so its
+    % sensitivity is visible rather than assumed away.
+    p.reliability.capBasis        = 'design';
+    p.reliability.diversityFactor = 0.85;
+    p.reliability.feederCapMargin = 1.0;   % used only by the 'case4' basis
 end
