@@ -351,22 +351,54 @@ cost difference rounds to zero. See `main_month4c_pwl_segment_sweep.m`
 `p.PWL.nSegments` varies.
 
 Reliability (`reliability_check.m`) is checked against ONE feeder
-capacity shared by cases 2-4 (contracted exactly to Case 4's own
-day-ahead peak import — deliberately tight, so coordination/robustness
-failures show up as real violations, not absorbed by generous headroom).
+capacity shared by cases 2-4. **How that threshold is set is a
+methodological choice, so it is an explicit switch** (`feeder_capacity.m`,
+`p.reliability.capBasis`):
 
-Representative result: **72% cost reduction, 60% CO2 reduction** (Case 4
-vs. Case 1); reliability violations go 0.11 kWh/0.25h (Case 2) → 0.54
-kWh/0.42h (Case 3, *worse* than Case 2 — closed-loop correction alone
-isn't enough without headroom to correct *into*) → 0 (Case 4). One claim
-deliberately NOT made: peak grid import is *higher* in Case 4 than Case
-1 — honestly reported rather than glossed over, since Case 4 serves
-strictly more (EV fleet charging, heat-pump electrification of what was
-gas heat) and its cost-minimizing LP deliberately imports more than
-instantaneous need during cheap hours to pre-charge storage.
-Cost/emissions optimality and peak-shaving are different objectives;
-peak-shaving would need its own explicit objective term (e.g. a demand
-charge) to also control the latter.
+- `'design'` (**default**) — sized the way a real connection is sized,
+  from connected load and nameplate ratings only: `diversityFactor ×
+  (peak elec demand + EV charger + battery charger + heat pump)` =
+  0.85 × 123.0 = **104.55 kW**. Every term is exogenous; no dispatch
+  strategy enters it.
+- `'case4'` — the earlier basis (Case 4's own day-ahead peak, 104.19 kW),
+  retained only for comparison. It is self-favourable: it measures the
+  proposed system against a line the proposed system draws.
+
+The threshold feeds `reliability_check` only, *after* every case is
+solved — it never enters the dispatch, so it cannot move cost, CO2 or
+peak, only `unmetE`/`violHrs`. Both bases are printed side by side.
+
+**Case 4's reliability advantage does survive the independent
+threshold** (0.00 violation hours vs 0.17 and 0.42) — but the script
+reports how narrow that is rather than leaving it to be discovered. The
+three realized peaks lie within 1.75 kW, so Case 4 is the only clean case
+for caps in **[103.76, 105.07) kW** — a 1.31 kW window, ~1.3% of the
+peak. Tighter and all three violate; looser and none do. What *is* robust
+is the **ordering of unmet energy**: Case 4 lowest and Case 3 highest at
+every swept threshold where anything violates at all. That ranking, not
+the zero, is the defensible reliability claim.
+
+Headline result: **72% cost reduction, 60% CO2 reduction** (Case 4 vs.
+Case 1) — but see the caveat below on what that measures. Two claims
+deliberately NOT made:
+
+- **Peak grid import is *higher* in Case 4 than Case 1**, reported rather
+  than glossed over: Case 4 serves strictly more (EV charging, heat-pump
+  electrification of what was gas heat) and its cost-minimizing dispatch
+  deliberately imports more during cheap hours to pre-charge storage.
+  Cost/emissions optimality and peak-shaving are different objectives;
+  peak-shaving needs its own objective term (e.g. a demand charge).
+- **The 72%/60% figures measure the equipment, not the modelling.**
+  Case 1 has no PV at all; Case 4 has ~412 kWh/day of free solar. Most of
+  that gap is the value of *owning* PV, a battery, an EV fleet and a heat
+  pump — any competently dispatched system with the same hardware would
+  capture most of it. The figures should never be quoted without stating
+  what they compare. The numbers that isolate *this thesis's* modelling
+  contributions are the ablations, and they are appropriately smaller:
+  **+1.8%** for the rolling intraday/real-time layers (Case 2 vs 4),
+  **+1.5%** for the robust reserve margin (Case 3 vs 4), and
+  **0.20–1.47%** for PWL vs constant efficiency (Case 5,
+  utilization-dependent). Those are the defensible modelling claims.
 
 ### Sensitivity analysis (`main_month4b_sensitivity_analysis.m`)
 
