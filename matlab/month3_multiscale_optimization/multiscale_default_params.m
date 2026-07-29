@@ -43,7 +43,15 @@ function p = multiscale_default_params()
 
     p.eta_FC_e  = 0.45;
     p.eta_FC_th = 0.35;
-    p.eta_PV    = 0.97;
+    % PV INVERTER / DC-DC CONVERTER efficiency -- NOT a solar-to-electricity
+    % efficiency. It multiplies fc.*.solar, which forecast_profiles.m defines
+    % as the PV array's available DC ELECTRICAL output in kW (a ~50 kW-peak
+    % array), not irradiance. Module-level conversion of sunlight to DC power
+    % (~15-22% for real silicon modules) sits UPSTREAM of this model boundary
+    % and is already embedded in that profile. 0.97 is an ordinary
+    % power-electronics efficiency; read as sunlight->electricity it would be
+    % physically impossible, so the boundary matters.
+    p.eta_PV    = 0.97;  % PV inverter/converter efficiency (DC array out -> AC elec)
     % NOTE: p.eta_FC_e/p.eta_FC_th above are no longer used by the fuel
     % cell's electrical/heat balance rows in dayahead_dispatch.m /
     % intraday_dispatch.m -- those now use the segmented PWL curves in

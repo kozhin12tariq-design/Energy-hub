@@ -4,7 +4,14 @@ function p = energy_hub_default_params()
     % Converter efficiencies
     p.eta_FC_e  = 0.45;  % fuel cell electrical efficiency (H2 -> elec)
     p.eta_FC_th = 0.35;  % fuel cell recoverable heat efficiency (H2 -> heat, MIMO output)
-    p.eta_PV    = 0.97;  % PV array + inverter efficiency (solar -> elec)
+    % PV INVERTER / DC-DC CONVERTER efficiency -- NOT a solar-to-electricity
+    % efficiency. It is applied to the PV array's DC electrical output, which
+    % is the model's input boundary. Module-level conversion of irradiance to
+    % DC power (~15-22% for real silicon modules) is UPSTREAM of this boundary
+    % and is embedded in the driving solar profile. 0.97 is a normal
+    % power-electronics figure; read as sunlight->electricity it would be
+    % physically impossible.
+    p.eta_PV    = 0.97;  % PV inverter/converter efficiency (DC array out -> AC elec)
 
     % Battery energy storage (e.g. residential BESS)
     p.Batt.eta_ch  = 0.95;  % charging efficiency

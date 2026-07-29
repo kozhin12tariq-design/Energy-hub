@@ -24,6 +24,15 @@ function fc = forecast_profiles(seed, uncertaintyScale)
 %                      severity without changing anything else about the
 %                      scenario.
 %
+%   MODEL BOUNDARY -- WHAT `solar` IS: the `solar` series is the PV
+%   array's AVAILABLE DC ELECTRICAL OUTPUT in kW (a ~50 kW-peak array),
+%   NOT irradiance in W/m^2. Module-level conversion of sunlight to DC
+%   power (~15-22% for real silicon modules) is upstream of this model
+%   and is already baked into these numbers. That is why the dispatch
+%   applies p.eta_PV = 0.97 to it: 0.97 is the INVERTER/converter
+%   efficiency downstream of the array, not a solar-to-electricity
+%   efficiency.
+%
 %   Output struct fc, all power in kW, price in $/kWh:
 %     hours (24x1), slots15 (96x1), slots5 (288x1)
 %     DA.solar, DA.Lelec, DA.Lheat, DA.priceImport, DA.priceExport   (24x1)
@@ -40,6 +49,8 @@ function fc = forecast_profiles(seed, uncertaintyScale)
     slots5  = (1:288)';   % 5-min slots across the day
 
     % ---- Day-ahead (hourly, smooth/idealized) --------------------------
+    % 50 = array DC peak in kW (already-generated electrical power), not
+    % irradiance -- see the MODEL BOUNDARY note in the header above.
     solar_DA = max(0, 50*sin(pi*(hours-6)/13));
     solar_DA(hours < 6 | hours > 19) = 0;
     Lelec_DA = 20 + 15*exp(-((hours-8).^2)/8) + 25*exp(-((hours-19).^2)/8);

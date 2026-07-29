@@ -76,6 +76,18 @@ automatically: any endpoint name ending in `"_Bus"` is a shared carrier
 bus across every component that references it; everything else is
 namespaced to its owning instance.
 
+**PV model boundary note**: the PV component starts at the array's **DC
+electrical output**, not at the solar resource. Its node is `PV_DC_in`
+and `eta_PV = 0.97` is the **inverter / DC-DC converter** efficiency
+applied to already-generated DC power. Module-level conversion of
+irradiance to DC (~15–22% for real silicon modules) is *upstream* of this
+model boundary and is embedded in the driving profile —
+`forecast_profiles.m`'s `solar` series is the array's available DC output
+in kW (a ~50 kW-peak array), not irradiance. Read as a
+sunlight-to-electricity efficiency, 0.97 would be physically impossible;
+as a power-electronics efficiency it is ordinary. The value is correct —
+only its labelling was previously ambiguous.
+
 **Sign convention note**: `energy_hub_incidence_matrix.m` uses the
 standard graph-theory convention (+1 at an edge's tail node, -1 at its
 head node). The energy-hub literature's own "coupling matrix"

@@ -13,10 +13,21 @@ function comp = hub_component(type, name, varargin)
 %
 %   type = 'pv' : comp = HUB_COMPONENT('pv', name, eta_PV)
 %     Unidirectional, SISO converter.
-%     Local graph:  Solar_in --(input P_solar)--> PV_out --(eta_PV)--> Elec_Bus
-%     Local incidence matrix (rows Solar_in,PV_out; cols e1,e2):
+%     Local graph:  PV_DC_in --(input P_solar)--> PV_out --(eta_PV)--> Elec_Bus
+%     Local incidence matrix (rows PV_DC_in,PV_out; cols e1,e2):
 %         A_PV = [ 1  0 ; -1  1 ]
-%     Constitutive law: P_elec = eta_PV * P_solar.
+%     Constitutive law: P_elec = eta_PV * P_DC.
+%
+%     MODEL BOUNDARY: this component starts at the PV array's DC
+%     ELECTRICAL output, not at the solar resource. eta_PV is the
+%     INVERTER / DC-DC converter efficiency (~0.97), not a
+%     solar-to-electricity efficiency. Module-level conversion of
+%     irradiance to DC power (~15-22% for real silicon modules) sits
+%     UPSTREAM of this boundary and is already embedded in the driving
+%     profile: the input P_solar is the array's available DC output in
+%     kW. Reading eta_PV as "sunlight to electricity at 97%" would be
+%     physically absurd; it is a power-electronics efficiency applied to
+%     power that has already been generated.
 %
 %   type = 'fuelcell' : comp = HUB_COMPONENT('fuelcell', name, eta_e, eta_th)
 %     Unidirectional, MIMO (1-in/2-out) converter -- one hydrogen input
@@ -71,10 +82,10 @@ function comp = hub_component(type, name, varargin)
             eta_PV = varargin{1};
             comp.name = name;
             comp.edges = { ...
-                eh_edge('Solar_in', 'PV_out', 'input', 1, ['P_solar_' name], ...
-                    [name ': solar resource -> PV array (exogenous input)']), ...
+                eh_edge('PV_DC_in', 'PV_out', 'input', 1, ['P_solar_' name], ...
+                    [name ': PV array DC output -> inverter input (exogenous)']), ...
                 eh_edge('PV_out', 'Elec_Bus', 'dependent', eta_PV, '', ...
-                    [name ': PV array output -> electrical bus (eta_PV = ' describe_eta(eta_PV) ')']) ...
+                    [name ': inverter DC->AC -> electrical bus (eta_PV = ' describe_eta(eta_PV) ' converter eff.)']) ...
             };
 
         case 'fuelcell'
