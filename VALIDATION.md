@@ -739,3 +739,211 @@ No file was reorganized, moved, renamed, merged, or split; no
 optimization model, MILP formulation, PWL segment structure or
 fill-order binary was changed; and no efficiency, rating, price or
 emission-factor value was changed.
+
+---
+
+# Architectural unification — one hub, everything inside IEEE 33
+
+Five tasks unifying the two previously disconnected integrations (Month
+2b: hub on IEEE 33 but static and, wrongly, tripled; Month 3/4: hub
+dispatched multi-scale but against a scalar cap with no network at all).
+
+## ONLY ONE HUB EXISTS — confirmed
+
+`main_month2b_ieee33_grid_integration.m` previously built one `busP_hub`
+vector, assigned `busP_hub(sc.bus)` for buses 18, 25 **and** 33 in a
+loop, then solved a single DistFlow with all three substituted — three
+coexisting hubs. Fixed: each siting now starts from the pristine base
+case, substitutes **one** bus, and solves alone. Grep confirms exactly
+one bus is substituted per power-flow solve, in every file
+(`busP_this(sc.bus)` in Month 2b, `busP(sys.hostBus)` in
+`network_verify.m`). The now-meaningless "all three together" section and
+its trunk-interaction narrative were removed — with one hub that
+interaction cannot arise, and the script says so.
+
+## Regression anchors — re-verified after all five tasks
+
+| Check | Value | Status |
+|---|---|---|
+| IEEE 33 base (no hub) | 202.677 kW, 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data` assertions | 3715 kW / 2300 kVAr | pass |
+| Cases 1–4 cost / CO2 / peak | $176.37/$50.61/$50.49/$49.74; 366.1/157.0/147.9/147.9 kg; 45.6/105.1/105.5/103.8 kW | unchanged |
+| Case 5 PWL benefit | 0.20% delivered / 1.47% gate | unchanged |
+| Curve-fit sweep | n=1 gap −4.36%, n=2 +24.80%, Optimism −0.1018 / +0.0058 | unchanged |
+| Fill-order binaries | silent normally; still fire under LP relaxation (`PH2seg(2)=4.576272 > 0 while PH2seg(1)=4.576272 < w(1)=30`) | pass |
+| All 8 `main_month*.m` | run end-to-end, Octave 8.4 headless, `glpk` only | pass |
+
+Tasks 2–4 are post-hoc verification and cannot alter any dispatch. Task 5
+adds an **opt-in** `p.network` block; absent it the day-ahead model is
+bit-identical (default cost still 43.027729), so Cases 1–4 are untouched
+by it too.
+
+## Task 1 — one system definition, one hub
+
+New `ieee33_system_definition.m` returns the canonical study system: the
+IEEE 33 network, the ONE hub's host bus (default 18), its parameter set,
+and the penetration summary.
+
+**Scale decision, and why the hub was not scaled up.** Peak import 103.8
+kW against a 3715 kW feeder is 2.79% feeder-wide, where a "no violations"
+verdict would be trivial. Of the two offered remedies I took
+siting-for-local-sensitivity rather than rating scale-up, because scaling
+ratings changes the dispatch and moves the Case 1–4 anchors that Tasks
+2–4 depend on. It is unnecessary: the hub's peak import is **115% of bus
+18's own load** (173% at bus 33) and it measurably swings V(18) between
+0.9120 pu (peak import) and 0.9213 pu (peak export) against 0.9131 pu
+base. Penetration is reported both ways everywhere.
+
+**Gate:** base case 202.677 kW / 0.9131 pu at bus 18; `ieee33_data`
+assertions pass; exactly one bus substituted per solve.
+
+Also corrected a claim its own numbers did not support: the script said
+bus 18 gains "the most voltage headroom per kW displaced" while printing
++0.0059 pu for **both** bus 18 and bus 25. True but invisible — the gains
+come from 75 kW and 320 kW displaced respectively. A pu/kW column now
+makes it explicit (7.92e-05 vs 1.85e-05, **4.3×**), and the text says bus
+25 is better for losses while bus 18 is better for voltage support per kW.
+
+## Task 2 — network verification of every dispatch
+
+New `network_verify.m` replays a completed 5-minute dispatch through the
+exact backward-forward sweep. Post-hoc by necessity: `distflow_bfs` is
+iterative and nonlinear and cannot sit inside a MILP. Unity power factor
+documented as a stated limitation making voltages optimistic.
+
+**Gate passed exactly:** feeding the host bus its own nominal load
+reproduces **202.677 kW and 0.9131 pu at bus 18**, confirming the
+substitution.
+
+`network_verify` computes the no-hub base case itself so no caller can
+quote an absolute without the reference — which matters: **21 of 33 IEEE
+33 buses already sit below 0.95 pu in the published base case, 24 h/day,
+with no hub present**. The raw "24.00 hours below limit" is a property of
+the benchmark, not a hub-caused violation, and Month 3 says so.
+
+The deltas that do attribute something to the hub are two-sided:
+
+| | base (no hub) | with hub | delta |
+|---|---|---|---|
+| Minimum voltage | 0.9131 pu | 0.9120 pu | **−0.0011** |
+| Host-bus voltage, mean | 0.9131 pu | 0.9190 pu | **+0.0059** |
+| Feeder loss energy | 4864.3 kWh/day | 4615.9 kWh/day | **−248.4 (−5.1%)** |
+
+Averaged over the day the hub helps the network; **at the one moment the
+network is most stressed it does not**, because at peak import it draws
+115% of the load it displaced. Cost of verification: 1.84 s for 288 power
+flows.
+
+## Task 3 — case studies with network consequences
+
+All six cases (1–4 plus the Case 5 PWL/constant-efficiency pair) replayed
+through the exact power flow.
+
+| Case | min V (pu) | losses kWh/day | vs base |
+|---|---|---|---|
+| base: no hub | 0.9131 | 4864.3 | — |
+| 1: Conventional | 0.9166 | 4654.4 | −209.8 |
+| 2: Day-ahead only | 0.9119 | 4619.3 | −245.0 |
+| 3: No robust reserve | 0.9118 | 4615.9 | −248.3 |
+| 4: Full proposed | 0.9120 | 4615.9 | −248.4 |
+| 5a: PWL (delivered) | 0.9124 | 4600.1 | −264.1 |
+| 5b: Const-eff (deliv.) | 0.9120 | 4599.4 | −264.8 |
+
+**Finding 1 — the cheapest dispatch is not the best for the network.**
+Case 4 is cheapest *and* lowest-loss, but the best minimum voltage is
+Case 1's 0.9166 pu against Case 4's 0.9120 (a 0.0046 pu gap). Reported as
+"better on one network measure and worse on the other" rather than
+selecting the flattering metric.
+
+**Finding 2 — modelling error does not propagate into grid error.** PWL
+vs constant efficiency differ by 0.0004 pu and 0.7 kWh/day — practically
+indistinguishable — while differing 0.20–1.47% in cost. On this profile
+PWL fidelity is a cost-accuracy question, not a grid-accuracy one.
+
+**Gate:** Cases 1–4 cost/CO2/peak byte-identical.
+
+## Task 4 — PWL segmentation study inside IEEE 33
+
+| nSegments | min V (pu) | losses kWh/day | MILP (s) | MILP+PF (s) |
+|---|---|---|---|---|
+| base | 0.9131 | 4864.3 | — | — |
+| 1 | 0.9156 | 4586.3 | 0.040 | 0.208 |
+| 2 | 0.9173 | 4587.7 | 0.042 | 0.206 |
+| 5 | 0.9173 | 4585.3 | 0.107 | 0.264 |
+| 10 | 0.9173 | 4585.7 | 0.163 | 0.319 |
+| 20 | 0.9173 | 4585.6 | 0.444 | 0.600 |
+| 36 | 0.9173 | 4585.4 | 1.156 | 1.314 |
+
+**The answer is the insensitive one, and it is reported.** Across a
+36-fold change in PWL fidelity, minimum voltage moves **0.0017 pu** (n=2
+through n=36 are identical) and loss energy **2.4 kWh/day**, while
+curve-fit error falls by a factor of 349 and the realized-cost gap swings
+from −4.36% to −0.00%.
+
+Mechanism: segmentation changes how much hydrogen the fuel cell burns and
+how it is costed, but the resulting change in net grid injection is small
+next to the load, PV and battery flows that dominate it — and voltage
+responds to the net injection, not to how it was decided.
+
+Consequence stated directly: **a grid-focused study can use coarse PWL,
+even n=1, and get essentially the right network answer.** Fine
+segmentation earns its keep on cost accuracy, exactly where n=1 and n=2
+are badly wrong. Accuracy in one metric does not imply accuracy in the
+other.
+
+True computational cost reported: verification adds 0.155–0.168 s, so at
+n=36 the full benchmarked study is 1.314 s against 1.156 s for the MILP
+alone (+14%).
+
+## Task 5 — LinDistFlow co-optimization
+
+New `lindistflow_sensitivity.m` plus an **opt-in** `p.network` block in
+`dayahead_dispatch.m`. With one controllable injection on a radial feeder
+each bus voltage is exactly affine in hub import, `V_j(I) = C_j + a_j·I`
+— verified against a full LinDistFlow solve to **1e-16 pu** — so the
+constraint set enters the MILP with no new variables.
+
+**The 0.95 pu limit is infeasible, and this was checked before
+assuming.** Reaching it needs the hub to *export* 352 kW at bus 18 and
+1946 kW at bus 33, against ~15 kW of actual export capability. The
+co-optimization instead imposes **do no harm**: no bus below its no-hub
+voltage.
+
+| | Verify-only | Co-optimized |
+|---|---|---|
+| Day-ahead cost | $43.0277 | $43.0306 (+0.01%) |
+| Peak grid import | 104.19 kW | 90.00 kW |
+| Exact min voltage | 0.9120 pu | 0.9131 pu |
+| Do-no-harm (exact solver) | **NO** | **YES** |
+
+Cost premium $0.0028/day; the cap binds in 1 of 24 hours.
+
+**LinDistFlow is optimistic** — +0.0056 pu at the host bus (24/24 hours),
+0.0064 pu on the base case, high at 32 of 33 buses. It does not bite here
+for a specific reason, stated rather than glossed: the do-no-harm floor
+sits at the same operating point in both models (import = the nominal
+load replaced), so both return their own base-case voltage there and the
+error cancels at the binding point. A hard 0.92 pu floor would expose the
+full margin and need tightening.
+
+**Honest scope.** One injection + radial topology + no dispatchable Q
+make the 32-row constraint set collapse **exactly** to a single scalar
+cap ("import ≤ the 90 kW nominal load replaced"). The apparatus is
+genuine and would generalize to several interacting hubs, dispatchable
+reactive power or meshed topology, but on this system it buys nothing a
+well-chosen import cap could not.
+
+## Files added / touched
+
+- **New**: `ieee33_system_definition.m`, `network_verify.m`,
+  `lindistflow_sensitivity.m`, `main_month4d_lindistflow_cooptimization.m`
+- **Task 1**: `main_month2b_ieee33_grid_integration.m`
+- **Task 2**: `main_month3_multiscale_dispatch.m`
+- **Task 3**: `main_month4a_case_studies.m`
+- **Task 4**: `main_month4c_pwl_segment_sweep.m`
+- **Task 5**: `dayahead_dispatch.m` (opt-in network block only)
+- **Docs**: `README.md`, `VALIDATION.md`
+
+No folder was moved, renamed, merged or split; no efficiency, rating,
+price or emission factor changed; the PWL fill-order binaries are
+untouched; and no existing validation was deleted.

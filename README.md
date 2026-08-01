@@ -7,6 +7,39 @@ with the incidence-and-coupling-matrix method, integrated into the IEEE
 / intraday / real-time) optimization framework — evaluated with case
 studies and a sensitivity analysis.
 
+## One hub, benchmarked on IEEE 33
+
+Two things define the scope of this study:
+
+**Exactly one energy hub.** The thesis models a *single* hub containing
+the full technology set — PV, fuel cell, battery, EV fleet, heat pump,
+building and pipe thermal storage — on shared electrical and heat buses
+with grid import/export. There is never more than one hub anywhere in the
+codebase. Where several buses are examined (`main_month2b...`), they are
+**alternative sitings of that one hub**, each solved on its own against
+the clean base case, never coexisting. `ieee33_system_definition.m` is
+the single source of truth for what the study system is.
+
+**IEEE 33 is the benchmark for every result.** Dispatch is no longer
+reported from a network-free abstraction: every case study, scenario and
+PWL segmentation run is replayed through the exact IEEE 33 power flow and
+reports bus voltages and feeder losses alongside cost, CO2 and fuel. Two
+modes exist:
+
+| Mode | File | What it does |
+|---|---|---|
+| **Verify-only** (default) | `network_verify.m` | Replays a completed dispatch through the exact backward-forward sweep. `distflow_bfs` is iterative and nonlinear, so it cannot sit inside a MILP — this *verifies* a schedule, it does not *constrain* one. |
+| **Co-optimized** | `lindistflow_sensitivity.m` + `p.network` in `dayahead_dispatch.m`, driven by `main_month4d...` | Embeds a linearized DistFlow voltage model in the day-ahead MILP so the network constrains the schedule while it is chosen. Opt-in; absent `p.network` the model is bit-identical to the network-free one. |
+
+**Scale, stated honestly.** The hub's peak import is ~104 kW against a
+3715 kW feeder — **2.79% feeder-wide**, but **115% of its host bus's own
+90 kW load** (173% at bus 33). It is locally dominant and feeder-wide
+marginal, and both figures are reported everywhere so the caveat travels
+with the data. Ratings were deliberately *not* scaled up: doing so would
+change the dispatch and move the Case 1–4 regression anchors, and it is
+unnecessary because the local effect is already measurable (the hub swings
+V(18) between 0.9120 and 0.9213 pu against a 0.9131 pu base).
+
 **The code is organized into four folders, one per roadmap month**, each
 with its own runnable script(s). Nothing else at the top level.
 
@@ -41,6 +74,7 @@ cd ../month4_case_studies_sensitivity
 main_month4a_case_studies
 main_month4b_sensitivity_analysis
 main_month4c_pwl_segment_sweep
+main_month4d_lindistflow_cooptimization
 ```
 
 Each script is self-contained (`clear; clc;` + whatever `addpath` it
@@ -400,6 +434,34 @@ deliberately NOT made:
   **0.20–1.47%** for PWL vs constant efficiency (Case 5,
   utilization-dependent). Those are the defensible modelling claims.
 
+### Network consequences on IEEE 33
+
+Every case is replayed through the exact power flow. Two findings the
+cost table alone would have missed, both reported rather than smoothed:
+
+- **The cheapest dispatch is not the best one for the network.** Case 4
+  is cheapest ($49.74) *and* has the lowest feeder losses (4615.9
+  kWh/day), but the best **minimum voltage** belongs to Case 1, the
+  conventional no-hub baseline (0.9166 pu vs Case 4's 0.9120). Case 4's
+  cost-minimising schedule concentrates EV and battery charging into
+  cheap hours, and nothing in its objective knows bus 18 is the
+  electrically weakest point on the feeder. Better on losses, worse at
+  the feeder's weakest moment — which is exactly the trade-off
+  benchmarking on IEEE 33 rather than on a scalar import cap exists to
+  expose.
+- **Modelling error does not propagate into grid error here.** PWL vs
+  constant efficiency differ by 0.0004 pu in minimum voltage and 0.7
+  kWh/day in losses — practically indistinguishable — while differing by
+  0.20–1.47% in cost. On this profile PWL fidelity is a *cost* accuracy
+  question, not a grid accuracy one.
+
+One caveat that must travel with any voltage number from this study:
+**21 of 33 IEEE 33 buses already sit below 0.95 pu in the published base
+case**, all day, with no hub present. The "hours below 0.95 pu" column
+therefore reads 24.00 for every case *including the no-hub base*, and
+measures the benchmark feeder rather than anything this thesis does. Read
+minimum voltage and the loss delta instead.
+
 ### Sensitivity analysis (`main_month4b_sensitivity_analysis.m`)
 
 Two headline sweeps, each averaged over 3 random-scenario seeds, plus a
@@ -440,6 +502,45 @@ different feasible region, so it makes a genuinely different fuel
 dispatch decision, not just a more accurate evaluation of one fixed
 plan) — reported honestly rather than smoothed into a cleaner-looking
 curve; see `VALIDATION.md` for the full table.
+
+### Co-optimization: LinDistFlow inside the MILP (`main_month4d...`)
+
+Verification cannot change a schedule — it can only report after the fact
+that the dispatch was network-unfriendly, which is what Month 3 found.
+This closes the loop by embedding a linearized DistFlow voltage model in
+the day-ahead MILP.
+
+**The 0.95 pu limit is infeasible on this system, and the script asks
+before assuming.** Reaching it would need the hub to *export* 352 kW at
+bus 18 and 1946 kW at bus 33, against an actual export capability near 15
+kW — infeasible by one to two orders of magnitude. So the co-optimization
+imposes an achievable and more meaningful floor: **do no harm**, no bus
+driven below its no-hub voltage.
+
+| | Verify-only | Co-optimized |
+|---|---|---|
+| Day-ahead cost | $43.0277 | $43.0306 (**+0.01%**) |
+| Peak grid import | 104.19 kW | 90.00 kW |
+| Exact min voltage | 0.9120 pu | 0.9131 pu |
+| Do-no-harm (exact solver) | **NO** | **YES** |
+
+Respecting the network costs $0.0028/day here, because the cap binds in
+only 1 of 24 hours.
+
+**Two honest limitations.** First, LinDistFlow is **optimistic** — it
+reads 0.0064 pu high on the base case and high at 32 of 33 buses, because
+dropping the quadratic loss term removes part of the voltage drop. It
+happens not to bite here only because the do-no-harm floor sits at the
+same operating point in both models, so the error cancels at the binding
+point; a hard 0.92 pu floor would expose the full margin. Second, with
+**one** injection on a **radial** feeder and no dispatchable reactive
+power, every bus voltage is monotone in hub import, so the 32-row
+LinDistFlow constraint set **collapses exactly to a single scalar cap**
+("import ≤ the 90 kW nominal load it replaced"). The apparatus is genuine
+and would generalize to several interacting hubs, dispatchable Q or
+meshed topology — but on this system it buys nothing a well-chosen import
+cap could not, and that is stated rather than hidden behind the
+machinery.
 
 ## Scope notes
 
