@@ -41,8 +41,20 @@ function p = multiscale_default_params()
     thisFile = mfilename('fullpath');
     addpath(fullfile(fileparts(thisFile), '..', 'month2_coupling_matrix_pwl_ieee33'));
 
-    p.eta_FC_e  = 0.45;
-    p.eta_FC_th = 0.35;
+    % NOTE: there is deliberately NO p.eta_FC_e / p.eta_FC_th here. Earlier
+    % versions defined scalar fuel-cell efficiencies (0.45 / 0.35) that the
+    % PWL work superseded; they were left in place with a comment saying so,
+    % which was a trap -- a reader could reasonably take 0.45 to be the
+    % operative electrical efficiency when nothing in the dispatch reads it.
+    % They are removed. The fuel cell's electrical and thermal conversion is
+    % defined ONLY by the segmented PWL curves in p.PWL below, and the true
+    % marginal efficiency varies with load (0.4453/0.5078/0.4578 over the
+    % segments the fuel cell actually operates in at nSegments=5), which is
+    % the entire point of the PWL model. Month 1/2's separate
+    % energy_hub_default_params.m still defines its own scalar values and is
+    % unaffected: those drive the constant-efficiency coupling-matrix demos,
+    % which are a different (and deliberately simpler) model.
+
     % PV INVERTER / DC-DC CONVERTER efficiency -- NOT a solar-to-electricity
     % efficiency. It multiplies fc.*.solar, which forecast_profiles.m defines
     % as the PV array's available DC ELECTRICAL output in kW (a ~50 kW-peak
@@ -52,14 +64,6 @@ function p = multiscale_default_params()
     % power-electronics efficiency; read as sunlight->electricity it would be
     % physically impossible, so the boundary matters.
     p.eta_PV    = 0.97;  % PV inverter/converter efficiency (DC array out -> AC elec)
-    % NOTE: p.eta_FC_e/p.eta_FC_th above are no longer used by the fuel
-    % cell's electrical/heat balance rows in dayahead_dispatch.m /
-    % intraday_dispatch.m -- those now use the segmented PWL curves in
-    % p.PWL (below), fit from p.PWL.eta_FC_e_func/eta_FC_th_func. The two
-    % scalars are kept only because other (unrelated) parts of the
-    % codebase may still reference them for documentation/back-reference
-    % purposes; they play no role in the fuel cell's dispatch physics
-    % from this file onward.
 
     % ---------------------------------------------------------------
     % PWL (piecewise-linear) part-load efficiency model for the fuel
