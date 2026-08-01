@@ -29,7 +29,11 @@ modes exist:
 | Mode | File | What it does |
 |---|---|---|
 | **Verify-only** (default) | `network_verify.m` | Replays a completed dispatch through the exact backward-forward sweep. `distflow_bfs` is iterative and nonlinear, so it cannot sit inside a MILP — this *verifies* a schedule, it does not *constrain* one. |
-| **Co-optimized** | `lindistflow_sensitivity.m` + `p.network` in `dayahead_dispatch.m`, driven by `main_month4d...` | Embeds a linearized DistFlow voltage model in the day-ahead MILP so the network constrains the schedule while it is chosen. Opt-in; absent `p.network` the model is bit-identical to the network-free one. |
+| **Co-optimized** | `lindistflow_sensitivity.m` + `p.network` in `dayahead_dispatch.m`, driven by `main_month4d...` | Embeds a linearized DistFlow voltage model in the **day-ahead** MILP so the network constrains the schedule while it is chosen. Opt-in; absent `p.network` the model is bit-identical to the network-free one. **Day-ahead only** — see the closed-loop caveat below. |
+
+Every script now reports network consequences, including the sensitivity
+analysis (`main_month4b...`), which was the last one judging results by
+the scalar feeder cap alone.
 
 **Scale, stated honestly.** The hub's peak import is ~104 kW against a
 3715 kW feeder — **2.79% feeder-wide**, but **115% of its host bus's own
@@ -483,15 +487,29 @@ small single-seed 2D grid for visualization:
    no-reserve case at low-to-moderate uncertainty, but the gap narrows
    at 3x — a margin calibrated for one range degrades gracefully, not
    perfectly, beyond it.
-3. A 4x4 reserve x uncertainty grid (violation hours) visualizes the
-   interaction as a heatmap.
+3. A 4x4 reserve x uncertainty grid (violation hours **and minimum
+   voltage**) visualizes the interaction as a heatmap.
+
+**All three sweeps are now verified against IEEE 33**, and the answer is
+a clean negative result: **forecast uncertainty and reserve margin move
+cost and unmet energy, not voltage.** Across every scenario in all three
+sweeps minimum voltage spans just **0.0007 pu** (0.9115–0.9122) —
+negligible next to the 0.0869 pu the feeder is already below nominal in
+its own base case. The direction is consistent (more reserve raises
+voltage slightly on every grid row, more uncertainty lowers it slightly
+down every column), so the honest statement is "directionally as
+expected, practically irrelevant", not "no effect". Mechanism: the
+reserve margin changes *when* energy is drawn and how much shortfall
+survives to real time, but barely changes the *peak* net injection — and
+peak injection is what sets minimum voltage. The reserve margin is a
+cost/energy instrument and should not be sold as voltage support.
 
 ### PWL segment-count trade-off (`main_month4c_pwl_segment_sweep.m`)
 
-Sweeps `p.PWL.nSegments` in `{1, 2, 5, 10, 20, 36}` for the fuel cell
-curves, reporting curve-fit approximation error (Max/RMSE vs. the exact
-continuous efficiency function — same methodology as Month 2's error
-table), day-ahead MILP solve time, and planned-vs-realized cost —
+Sweeps `p.PWL.nSegments` in `{1, 2, 5, 10, 20, 36, 50, 75, 100, 150}` for
+the fuel cell curves, reporting curve-fit approximation error (Max/RMSE
+vs. the exact continuous efficiency function — same methodology as Month
+2's error table), day-ahead MILP solve time, and planned-vs-realized cost —
 mirroring the accuracy-vs-computation trade-off style used by Huang et
 al. (not a claim of matching their specific numbers). Curve-fit error
 falls monotonically with segment count and MILP solve time grows with
@@ -502,6 +520,27 @@ different feasible region, so it makes a genuinely different fuel
 dispatch decision, not just a more accurate evaluation of one fixed
 plan) — reported honestly rather than smoothed into a cleaner-looking
 curve; see `VALIDATION.md` for the full table.
+
+**The tractability wall is found, which is the point of extending to
+150.** The thesis claims high-fidelity PWL *while retaining MILP
+tractability*, and a sweep stopping at 36 never tested the second half of
+that claim. Solve time runs 1.3 s (n=36) → 3.0 s (n=50) → 10.4 s (n=75) →
+17.8 s (n=100) → **149.7 s (n=150)**: roughly 8× the time for 1.5× the
+segments on the last step, and 112× the n=36 baseline. The binary count
+grows strictly linearly (3576 fill-order binaries at n=150), so this is
+not "more binaries" — as segments narrow, each binary controls a thinner
+slice of fuel, the LP relaxation becomes a weaker guide to the integer
+optimum, and `glpk` explores disproportionately more nodes. A 300 s
+per-solve budget records an over-budget count as a *result* rather than
+dropping the row.
+
+**Practical band for this system: roughly n=10 to n=36.** Below 10 the
+cost error is material (n=1 and n=2 are wrong by −4.36% and +24.80%);
+above ~36 curve-fit error is already under 0.03 kW on a 150 kW device and
+solve time climbs steeply for accuracy that changes no reported number.
+Huang et al. report 30–70 on their system; this one sits lower — *not* a
+reproduction of their result (different system, curves, prices and
+solver), only the same shape of trade-off.
 
 ### Co-optimization: LinDistFlow inside the MILP (`main_month4d...`)
 
@@ -526,6 +565,23 @@ driven below its no-hub voltage.
 
 Respecting the network costs $0.0028/day here, because the cap binds in
 only 1 of 24 hours.
+
+**But the guarantee is day-ahead only, and it does not survive the
+rolling layers.** `p.network` is read by `dayahead_dispatch.m` alone;
+`intraday_dispatch.m` and `realtime_balance.m` are network-blind. Running
+the co-optimized plan through the **full closed loop** across 3 seeds ×
+3 uncertainty levels, do-no-harm held in only **4 of 9** scenarios: the
+day-ahead cap is respected exactly (90.00 kW planned every time) but the
+realized 5-minute peak reaches **97.45 kW**, 8.3% above it, and minimum
+voltage falls up to 0.0006 pu below the floor the constraint exists to
+protect. Failures concentrate at higher uncertainty, exactly as the
+mechanism predicts — intraday and real-time correct against actual
+conditions with no voltage model, and larger forecast error means larger
+uncorrected excursions. **Constraining only the day-ahead layer is
+insufficient**; the do-no-harm result is a property of the *plan*, not of
+the delivered dispatch. Extending the constraint into all three
+timescales is the indicated next step, and this test is what establishes
+that it is needed.
 
 **Two honest limitations.** First, LinDistFlow is **optimistic** — it
 reads 0.0064 pu high on the base case and high at 32 of 33 buses, because

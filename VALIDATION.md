@@ -947,3 +947,186 @@ well-chosen import cap could not.
 No folder was moved, renamed, merged or split; no efficiency, rating,
 price or emission factor changed; the PWL fill-order binaries are
 untouched; and no existing validation was deleted.
+
+---
+
+# Audit fixes + extending the segmentation study to 150
+
+Four tasks: close the last gap outside the IEEE 33 benchmark, scope and
+then empirically test the co-optimization claim, push the segment sweep
+to where tractability actually breaks, and two clarity fixes.
+
+## Regression anchors — re-verified after all four tasks
+
+| Check | Value | Status |
+|---|---|---|
+| IEEE 33 base (no hub) | 202.677 kW, 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data` assertions | 3715 kW / 2300 kVAr | pass |
+| Case 5 PWL benefit | 0.20% delivered / 1.47% gate | unchanged |
+| Sweep n=1, n=2 | gap −4.36% / +24.80%, Optimism −0.1018 / +0.0058 | unchanged |
+| Month 3 network deltas | min V 0.9120 pu, losses −248.4 kWh/day | unchanged |
+| Fill-order binaries | silent normally; still fire under LP relaxation | pass |
+| Exactly one hub | 3 bus-substitution sites, one bus each | pass |
+| All 8 `main_month*.m` | run end-to-end | pass |
+
+## Task 1 — the sensitivity analysis joins the benchmark
+
+`main_month4b_sensitivity_analysis.m` contained **zero** references to
+`network_verify` or `distflow` — the last script producing results
+outside the benchmark, and the worst place for that gap, since this is
+where robustness and uncertainty are stressed.
+
+All three sweeps now report min voltage, worst bus and feeder losses.
+Minimum voltage is the **worst across seeds** (for a limit, the worst
+case is what matters); losses are averaged like the other energy columns.
+
+**Answer to the question the task posed: uncertainty and reserve margin
+move cost and unmet energy, NOT voltage.**
+
+| Sweep | min V range |
+|---|---|
+| Reserve 0 → 2.0 | 0.9117 → 0.9122 pu |
+| Uncertainty 0.5 → 3.0 (with reserve) | 0.9119 → 0.9115 pu |
+| Uncertainty 0.5 → 3.0 (no reserve) | 0.9118 → 0.9115 pu |
+| **Whole scenario space** | **0.0007 pu total spread** |
+
+Negligible against the 0.0869 pu the feeder is already below nominal in
+its own base case. The *direction* is consistent — the printed grid shows
+minimum voltage rising left-to-right with reserve and falling
+top-to-bottom with uncertainty on every row and column — so the reported
+claim is "directionally as expected, practically irrelevant", not "no
+effect". Mechanism: the reserve margin changes *when* energy is drawn and
+how much shortfall survives to real time, but barely changes the *peak*
+net injection, and peak injection sets minimum voltage. The reserve
+margin is a cost/energy instrument, not voltage support.
+
+**Gate:** every cost figure unchanged (planned $42.18/$42.60/$43.03/
+$43.77/$45.06; actual $49.86/$49.48/$49.10/$48.18/$47.96), all unmetE and
+violHrs identical. Runtime ~4.3 min (61 added 288-step verifications).
+
+## Task 2 — the co-optimization claim is day-ahead only, and fails downstream
+
+**2a — scoped.** Verified the gap is real: `p.network` has 7 references in
+`dayahead_dispatch.m` and **zero** in `intraday_dispatch.m` and
+`realtime_balance.m`. Every printed do-no-harm conclusion now says it
+holds for the day-ahead schedule and that the rolling layers are
+network-blind.
+
+**2b — then tested, and it does not survive.** The co-optimized plan was
+run through the full closed loop and its realized 5-minute injections
+checked against the exact power flow, over 3 seeds × 3 uncertainty
+levels — one benign scenario proves nothing here.
+
+| seed | unc | DA cap | realized peak | min V | holds |
+|---|---|---|---|---|---|
+| 42 | 1.0 | 90.00 | 89.55 | 0.9131 | yes |
+| 42 | 2.0 | 90.00 | 91.15 | 0.9130 | **no** |
+| 42 | 3.0 | 90.00 | 93.13 | 0.9128 | **no** |
+| 7 | 1.0 | 90.00 | 88.50 | 0.9132 | yes |
+| 7 | 2.0 | 90.00 | 87.60 | 0.9133 | yes |
+| 7 | 3.0 | 90.00 | 87.88 | 0.9133 | yes |
+| 123 | 1.0 | 90.00 | 90.37 | 0.9131 | **no** |
+| 123 | 2.0 | 90.00 | 93.53 | 0.9128 | **no** |
+| 123 | 3.0 | 90.00 | 97.45 | 0.9125 | **no** |
+
+**Held in 4 of 9.** The day-ahead cap is respected exactly every time,
+but the realized peak reaches **97.45 kW (8.3% over)** and minimum
+voltage falls up to **0.0006 pu below** the floor the constraint exists
+to protect. Failures concentrate at higher uncertainty and on seeds whose
+realized peak already sat near the cap — exactly what the mechanism
+predicts, since intraday and real-time correct against actual conditions
+with no voltage model in them.
+
+**Consequence:** constraining only the day-ahead layer is insufficient;
+do-no-harm is a property of the *plan*, not the delivered dispatch.
+Extending `p.network` into intraday/real-time was deliberately not done —
+the instruction was to establish empirically whether it is needed. It is.
+
+## Task 3 — segmentation sweep extended to 150; the wall is found
+
+Extended to `{1,2,5,10,20,36,50,75,100,150}`. New rows:
+
+| n | MaxErrE (kW) | Planned ($) | Realized ($) | min V (pu) | losses kWh | MILP (s) | MILP+PF (s) |
+|---|---|---|---|---|---|---|---|
+| 50 | 0.0111 | 34.6062 | 34.6058 | 0.9173 | 4585.4 | 2.91 | 3.13 |
+| 75 | 0.0061 | 34.6058 | 34.6056 | 0.9173 | 4585.5 | 11.02 | 11.23 |
+| 100 | 0.0030 | 34.6057 | 34.6056 | 0.9173 | 4585.5 | 17.36 | 17.69 |
+| 150 | 0.0013 | 34.6055 | 34.6055 | 0.9173 | 4585.5 | **156.69** | 156.93 |
+
+**The wall:** n=100 → n=150 costs roughly **8–9× the time for 1.5× the
+segments**, and ~112× the n=36 baseline. n=150 completes inside the 300 s
+budget so it is reported as a number, but it is unambiguously where
+tractability degrades.
+
+Mechanism, not just observation: the binary count grows strictly linearly
+(3576 fill-order binaries at n=150 = 24 h × 149), so a linear-cost solver
+would show a linear trend. Branch-and-bound does not — as segments narrow
+each binary controls a thinner slice of fuel, the LP relaxation becomes a
+weaker guide to the integer optimum, and `glpk` explores
+disproportionately more nodes. Cost per *segment* is roughly constant;
+cost per *solve* is not.
+
+Note the network columns are **flat from n=2 onward** (0.9173 pu, ~4585
+kWh/day), reinforcing the previous session's finding that segmentation is
+a cost-accuracy lever, not a grid one.
+
+**Practical band for this system: n=10 to n=36.** Below 10 the cost error
+is material; above ~36 curve-fit error is already under 0.03 kW on a 150
+kW device and solve time climbs for accuracy that changes no reported
+number. Huang et al.'s 30–70 band is explicitly *not* reproduced — the
+output says so.
+
+Infrastructure: 300 s per-solve budget (over-budget counts reported as a
+result, not dropped); mean-of-5 timing retained where a single solve is
+under 2 s so pre-existing rows keep their methodology, single sample
+above, with a `samples` column stating which.
+
+**Corrected mid-draft:** a first version asserted the n=50/n=75 timings
+were "near-equal noise" — true of one run, false of the next. Every count
+above n=36 is a single timed solve, so the mid-range ordering is not
+stable between runs; the text now says exactly that and rests the
+conclusion only on the n=100 → n=150 step, which dwarfs any contention.
+
+**Gate:** rows n = 1, 2, 5, 10, 20, 36 byte-identical in every column
+except wall-clock time.
+
+## Task 4 — two clarity fixes
+
+**4a — dead parameters removed.** `multiscale_default_params.m` still
+defined `p.eta_FC_e = 0.45` / `p.eta_FC_th = 0.35` with a comment saying
+they were unused. The comment was insufficient: a reader could reasonably
+take 0.45 to be the operative efficiency. Verified nothing reads them
+(the only Month 3/4 references were comment text), then **deleted** — the
+preferred option — leaving an explicit note that their absence is
+deliberate and that fuel-cell conversion is defined only by the PWL
+curves, whose true marginal efficiency varies with load
+(0.4453/0.5078/0.4578 over the segments actually used).
+
+Month 1/2's separate `energy_hub_default_params.m` keeps its own scalars
+and was deliberately **not** touched: they are read by `hub_component.m`,
+`energy_hub_example_hub.m` and `main_month1...`, driving the
+constant-efficiency coupling-matrix demos. Deleting those would have
+broken Months 1–2.
+
+**4b — Case 1's best voltage explained.** The network table shows the
+do-nothing baseline with the best minimum voltage (0.9166 pu). Added the
+mechanism: Case 1 serves heat with a gas boiler, so the only electricity
+it draws at bus 18 is its own electrical load — no heat pump, no EV
+charging, no battery pre-charging in cheap hours. Every hub case
+electrifies heat and adds controllable load, drawing more peak current
+down the long radial to the weakest bus, and minimum voltage is set by
+peak current. Case 1 wins on voltage by doing less and pays 255% more in
+cost and 147% more in CO2 for it.
+
+## Files touched
+
+- **Task 1**: `main_month4b_sensitivity_analysis.m`
+- **Task 2**: `main_month4d_lindistflow_cooptimization.m`
+- **Task 3**: `main_month4c_pwl_segment_sweep.m`
+- **Task 4**: `multiscale_default_params.m`, `main_month4a_case_studies.m`
+- **Docs**: `README.md`, `VALIDATION.md`
+
+No folder moved, renamed, merged or split; no efficiency, rating, price
+or emission factor changed (the Task 4a deletion removed unused
+definitions, not values in use); fill-order binaries untouched; no
+existing validation deleted.
