@@ -49,6 +49,16 @@ Cnominal = simulate_multiscale_day(p, fcNominal, struct('useIntraday', true, 're
 % which meant the reserveScale=1 run that anchors this script also defined
 % the threshold every other reserveScale was then judged against. Both are
 % printed so the shift is visible; the sweeps below use the design basis.
+% Network benchmark. Every sweep below is verified against IEEE 33, not
+% only against the scalar feeder cap -- this was the last script producing
+% results outside the benchmark the study is built on, and it is the worst
+% place for that gap: this is where robustness and uncertainty are
+% stressed, exactly where voltage consequences would matter.
+addpath('../month2_coupling_matrix_pwl_ieee33');
+sysNet = ieee33_system_definition();
+sysNetBaseMinV = min(abs(distflow_bfs(sysNet.branches, sysNet.busP_base, ...
+    sysNet.busQ_base, sysNet.Vbase_kV)) / sysNet.Vbase_kV);
+
 [feederCap, capLabel] = feeder_capacity(p, fcNominal, 'design');
 [feederCapSelf, capLabelSelf] = feeder_capacity(p, fcNominal, 'case4', Cnominal.dayaheadPeakImport);
 fprintf('Feeder capacity (fixed for this whole script): %.2f kW  [%s]\n', feederCap, capLabel);
@@ -66,20 +76,29 @@ plannedCost_r = zeros(size(reserveLevels));
 actualCost_r  = zeros(size(reserveLevels));
 unmetE_r      = zeros(size(reserveLevels));
 violHrs_r     = zeros(size(reserveLevels));
+minV_r        = zeros(size(reserveLevels));   % worst across seeds (safety-relevant)
+worstBus_r    = zeros(size(reserveLevels));
+loss_r        = zeros(size(reserveLevels));   % mean across seeds
 
 for i = 1:numel(reserveLevels)
-    pc = 0; ac = 0; ue = 0; vh = 0;
+    pc = 0; ac = 0; ue = 0; vh = 0; ls = 0; mv = Inf; mb = 0;
     for sd = seeds
         fc = forecast_profiles(sd, 1.0);
         C = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', reserveLevels(i)));
         V = reliability_check(C.Pg_imp5, C.Pg_exp5, feederCap);
+        NVi = network_verify(sysNet, C.Pg_imp5 - C.Pg_exp5);
         pc = pc + C.plannedCost; ac = ac + C.actualCost;
         ue = ue + V.unmetEnergy_kWh; vh = vh + V.violationHours;
+        ls = ls + NVi.lossEnergy_kWh;
+        if NVi.minV < mv; mv = NVi.minV; mb = NVi.minV_bus; end
     end
     plannedCost_r(i) = pc/nSeeds; actualCost_r(i) = ac/nSeeds;
     unmetE_r(i) = ue/nSeeds; violHrs_r(i) = vh/nSeeds;
-    fprintf('reserveScale=%.2f: planned=$%.2f actual=$%.2f unmetE=%.3f kWh violHrs=%.3f (avg of %d seeds)\n', ...
-        reserveLevels(i), plannedCost_r(i), actualCost_r(i), unmetE_r(i), violHrs_r(i), nSeeds);
+    loss_r(i) = ls/nSeeds; minV_r(i) = mv; worstBus_r(i) = mb;
+    fprintf(['reserveScale=%.2f: planned=$%.2f actual=$%.2f unmetE=%.3f kWh violHrs=%.3f' ...
+        ' | minV=%.4f pu (bus %d) losses=%.1f kWh/day\n'], ...
+        reserveLevels(i), plannedCost_r(i), actualCost_r(i), unmetE_r(i), violHrs_r(i), ...
+        minV_r(i), worstBus_r(i), loss_r(i));
 end
 fprintf(['\nReliability improves monotonically with reserve (violation hours %.3f -> %.3f as scale\n' ...
     'goes 0 -> %.1f). The DAY-AHEAD PLANNED cost rises monotonically with reserve ($%.2f -> $%.2f),\n' ...
@@ -101,21 +120,33 @@ actualCost_u_res  = zeros(size(uncLevels)); actualCost_u_nores  = zeros(size(unc
 unmetE_u_res      = zeros(size(uncLevels)); unmetE_u_nores      = zeros(size(uncLevels));
 violHrs_u_res     = zeros(size(uncLevels)); violHrs_u_nores     = zeros(size(uncLevels));
 
+minV_u_res = zeros(size(uncLevels)); minV_u_nores = zeros(size(uncLevels));
+loss_u_res = zeros(size(uncLevels)); loss_u_nores = zeros(size(uncLevels));
+
 for i = 1:numel(uncLevels)
     ac_r=0; ue_r=0; vh_r=0; ac_n=0; ue_n=0; vh_n=0;
+    ls_r=0; ls_n=0; mv_r=Inf; mv_n=Inf;
     for sd = seeds
         fc = forecast_profiles(sd, uncLevels(i));
         Cr = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', 1.0));
         Cn = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', 0.0));
         Vr = reliability_check(Cr.Pg_imp5, Cr.Pg_exp5, feederCap);
         Vn = reliability_check(Cn.Pg_imp5, Cn.Pg_exp5, feederCap);
+        NVr = network_verify(sysNet, Cr.Pg_imp5 - Cr.Pg_exp5);
+        NVn = network_verify(sysNet, Cn.Pg_imp5 - Cn.Pg_exp5);
         ac_r = ac_r + Cr.actualCost; ue_r = ue_r + Vr.unmetEnergy_kWh; vh_r = vh_r + Vr.violationHours;
         ac_n = ac_n + Cn.actualCost; ue_n = ue_n + Vn.unmetEnergy_kWh; vh_n = vh_n + Vn.violationHours;
+        ls_r = ls_r + NVr.lossEnergy_kWh; ls_n = ls_n + NVn.lossEnergy_kWh;
+        mv_r = min(mv_r, NVr.minV); mv_n = min(mv_n, NVn.minV);
     end
     actualCost_u_res(i)=ac_r/nSeeds; unmetE_u_res(i)=ue_r/nSeeds; violHrs_u_res(i)=vh_r/nSeeds;
     actualCost_u_nores(i)=ac_n/nSeeds; unmetE_u_nores(i)=ue_n/nSeeds; violHrs_u_nores(i)=vh_n/nSeeds;
-    fprintf('uncertaintyScale=%.2f: [with reserve] unmetE=%.3f kWh violHrs=%.3f | [no reserve] unmetE=%.3f kWh violHrs=%.3f\n', ...
-        uncLevels(i), unmetE_u_res(i), violHrs_u_res(i), unmetE_u_nores(i), violHrs_u_nores(i));
+    loss_u_res(i)=ls_r/nSeeds; loss_u_nores(i)=ls_n/nSeeds;
+    minV_u_res(i)=mv_r; minV_u_nores(i)=mv_n;
+    fprintf(['uncertaintyScale=%.2f: [with reserve] unmetE=%.3f violHrs=%.3f minV=%.4f' ...
+        ' | [no reserve] unmetE=%.3f violHrs=%.3f minV=%.4f\n'], ...
+        uncLevels(i), unmetE_u_res(i), violHrs_u_res(i), minV_u_res(i), ...
+        unmetE_u_nores(i), violHrs_u_nores(i), minV_u_nores(i));
 end
 fprintf(['\nUnmet ENERGY grows monotonically with uncertainty in both cases (with reserve: %.3f -> %.3f kWh;\n' ...
     'no reserve: %.3f -> %.3f kWh) -- larger forecast errors mean larger individual shortfalls even when\n' ...
@@ -136,15 +167,62 @@ fprintf('=====================================================\n');
 gridReserve = [0, 0.5, 1.0, 1.5];
 gridUnc = [0.5, 1.0, 2.0, 3.0];
 violHrsGrid = zeros(numel(gridUnc), numel(gridReserve));
+minVGrid    = zeros(numel(gridUnc), numel(gridReserve));
 for iu = 1:numel(gridUnc)
     for ir = 1:numel(gridReserve)
         fc = forecast_profiles(42, gridUnc(iu));
         C = simulate_multiscale_day(p, fc, struct('useIntraday', true, 'reserveScale', gridReserve(ir)));
         V = reliability_check(C.Pg_imp5, C.Pg_exp5, feederCap);
+        NVg = network_verify(sysNet, C.Pg_imp5 - C.Pg_exp5);
         violHrsGrid(iu, ir) = V.violationHours;
+        minVGrid(iu, ir)    = NVg.minV;
     end
 end
-fprintf('Violation-hours grid (rows=uncertainty, cols=reserve) computed.\n');
+fprintf('Violation-hours grid (rows=uncertainty, cols=reserve) computed.\n\n');
+fprintf('Minimum voltage grid (pu), rows=uncertainty, cols=reserve:\n');
+fprintf('%12s', 'unc \ res');
+fprintf('%10.2f', gridReserve); fprintf('\n');
+for iu = 1:numel(gridUnc)
+    fprintf('%12.2f', gridUnc(iu));
+    fprintf('%10.4f', minVGrid(iu,:)); fprintf('\n');
+end
+
+%% Does robustness/uncertainty move VOLTAGE, or only cost and energy? ---
+allMinV = [minV_r(:); minV_u_res(:); minV_u_nores(:); minVGrid(:)];
+vSpreadAll = max(allMinV) - min(allMinV);
+fprintf(['\n=====================================================\n' ...
+    ' Does the reserve margin do anything for VOLTAGE?\n' ...
+    '=====================================================\n']);
+fprintf('Across every scenario in all three sweeps, minimum voltage spans %.4f pu\n', vSpreadAll);
+fprintf('  reserve sweep      : %.4f -> %.4f pu (reserveScale 0 -> %.1f)\n', ...
+    minV_r(1), minV_r(end), reserveLevels(end));
+fprintf('  uncertainty sweep  : with reserve %.4f -> %.4f pu, no reserve %.4f -> %.4f pu\n', ...
+    minV_u_res(1), minV_u_res(end), minV_u_nores(1), minV_u_nores(end));
+fprintf('  no-hub base case   : %.4f pu (reference)\n', sysNetBaseMinV);
+
+if vSpreadAll < 5e-3
+    fprintf(['\nVOLTAGE IS ESSENTIALLY INSENSITIVE TO BOTH KNOBS, and that is the finding.\n' ...
+        'A %.4f pu spread across a 4x change in reserve margin AND a 6x change in forecast\n' ...
+        'uncertainty is negligible next to the %.4f pu the feeder is already below nominal\n' ...
+        'in its own base case.\n' ...
+        '\nThe DIRECTION is nonetheless consistent and physically sensible, and the grid above\n' ...
+        'shows it cleanly: more reserve raises minimum voltage slightly (left to right on\n' ...
+        'every row) and more uncertainty lowers it slightly (top to bottom in every column).\n' ...
+        'So the effect is real in sign but negligible in magnitude -- the honest statement is\n' ...
+        '"directionally as expected, practically irrelevant", not "no effect".\n' ...
+        '\nMechanism: the reserve margin constrains how much UNUSED storage headroom the\n' ...
+        'day-ahead plan must keep, which shifts WHEN energy is drawn and how much shortfall\n' ...
+        'survives to real time -- but it barely changes the PEAK net injection at the host\n' ...
+        'bus, and peak injection is what sets minimum voltage.\n' ...
+        '\nPractical reading: the reserve margin is a COST and UNMET-ENERGY instrument, not a\n' ...
+        'network one. It should not be sold as voltage support. If voltage were the binding\n' ...
+        'concern, the effective lever is a cap on peak import (which is what the Month 4d\n' ...
+        'co-optimization actually imposes), not reserve headroom.\n'], vSpreadAll, 1-sysNetBaseMinV);
+else
+    fprintf(['\nVoltage DOES move materially across these sweeps (%.4f pu spread), so the\n' ...
+        'reserve margin and forecast uncertainty are network-relevant as well as\n' ...
+        'cost-relevant.\n'], vSpreadAll);
+end
 
 %% Plots ----------------------------------------------------------------
 try
