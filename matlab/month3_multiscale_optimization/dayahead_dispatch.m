@@ -153,7 +153,32 @@ function sol = dayahead_dispatch(p, fc)
     end
 
     %% Inequality constraints: reserve margin (4/hr) + PWL fill-order (2*(s-1)/hr)
-    nIneq = nT*(4 + 2*(s-1));
+    %  + OPTIONAL LinDistFlow voltage rows (see below).
+    %
+    % NETWORK CO-OPTIMIZATION (opt-in, default OFF). If p.network is
+    % present and enabled, one linear voltage row per monitored bus per
+    % hour is added, letting the IEEE 33 network CONSTRAIN the schedule
+    % instead of merely being verified afterwards. Under LinDistFlow with
+    % exactly ONE controllable injection every bus voltage is affine in
+    % the hub's net import I(t) = Pgi(t) - Pge(t):
+    %       V_j(t) = C_j + a_j * I(t),   a_j < 0
+    % so requiring V_j(t) >= Vfloor_j becomes, in the EXISTING grid
+    % variables and with no new ones:
+    %       (-a_j)*Pgi(t) - (-a_j)*Pge(t) <= C_j - Vfloor_j
+    % Absent p.network this block adds nothing and the model is
+    % bit-identical to the network-free version used by Cases 1-4.
+    useNet = isfield(p, 'network') && isfield(p.network, 'enabled') && p.network.enabled;
+    if useNet
+        netBuses  = p.network.buses(:)';        % buses to monitor
+        netC      = p.network.C(:);             % intercepts (pu)
+        netA      = p.network.a(:);             % sensitivities (pu/kW)
+        netFloor  = p.network.Vfloor(:);        % per-bus floor (pu)
+        nNetRows  = nT * numel(netBuses);
+    else
+        netBuses = []; nNetRows = 0;
+    end
+
+    nIneq = nT*(4 + 2*(s-1)) + nNetRows;
     Aub = zeros(nIneq, nVar); bub = zeros(nIneq,1);
     row = 0;
     for t = 1:nT
@@ -187,6 +212,14 @@ function sol = dayahead_dispatch(p, fc)
             row = row+1; % -PH2seg(k) + w(k)*u_k <= 0   (i.e. PH2seg(k) >= w(k)*u_k)
             Aub(row, vixSeg(t,k)) = -1; Aub(row, vixU(t,k)) = w(k);
             bub(row) = 0;
+        end
+
+        % LinDistFlow voltage floor at each monitored bus (opt-in).
+        for bi = 1:numel(netBuses)
+            row = row+1;
+            Aub(row, vix(t,OFF.Pgi)) = -netA(bi);
+            Aub(row, vix(t,OFF.Pge)) =  netA(bi);
+            bub(row) = netC(bi) - netFloor(bi);
         end
     end
 
