@@ -59,7 +59,29 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     % variables: [Pg_imp Pg_exp Ps Pbatt_ch Pbatt_dis  slackGi+ slackGi- slackGe+ slackGe- slackBc+ slackBc- slackBd+ slackBd-]
     IDX = struct('Pgi',1,'Pge',2,'Ps',3,'Bch',4,'Bdis',5, ...
                   'sGiP',6,'sGiN',7,'sGeP',8,'sGeN',9,'sBcP',10,'sBcN',11,'sBdP',12,'sBdN',13);
-    nVar = 13;
+    % Reactive power and the network constraint are opt-in here exactly as
+    % in the slower layers. Real time is the LAST place the schedule can be
+    % altered, so if it is network-blind the voltage compliance the
+    % day-ahead plan was solved for can be undone in the final 5 minutes.
+    useQ   = isfield(p, 'Inverter');
+    useNet = isfield(p, 'network') && isfield(p.network, 'enabled') && p.network.enabled;
+    % Vsl is a single non-negative slack on the voltage floor. Real time
+    % MUST balance the actual load with almost no degrees of freedom (fuel
+    % cell, heat pump and EV are held at the intraday setpoint), so a HARD
+    % voltage floor here is genuinely infeasible whenever realized demand
+    % exceeds what the floor permits -- verified: glpk returns status 10.
+    % A real controller cannot refuse to serve load either; it does its
+    % best and accepts the excursion. The floor is therefore SOFT at this
+    % level, with a penalty large enough to dominate energy cost so it is
+    % respected whenever it CAN be, and the residual violation is
+    % reported rather than hidden by an infeasible solve.
+    % Optional variables are appended dynamically -- hardcoding their
+    % indices breaks as soon as one of the two options is off.
+    nextIdx = 14;
+    if useQ;   IDX.Qh = nextIdx; IDX.Qa = nextIdx+1; nextIdx = nextIdx+2; end
+    if useNet; IDX.Vsl = nextIdx;                    nextIdx = nextIdx+1; end
+    nVar = nextIdx - 1;
+    vPenalty = 1e4;   % $ per unit of (row-normalised) voltage shortfall
 
     lb = zeros(nVar,1);
     ub = zeros(nVar,1);
@@ -67,11 +89,18 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     ub(IDX.Ps)  = actualSolarAvail;
     ub(IDX.Bch) = p.Batt.Pch_max; ub(IDX.Bdis) = p.Batt.Pdis_max;
     ub(IDX.sGiP:IDX.sBdN) = Inf;
+    if useQ
+        lb(IDX.Qh) = -p.Inverter.Q_max;
+        ub(IDX.Qh) =  p.Inverter.Q_max;
+        ub(IDX.Qa) =  p.Inverter.Q_max;
+    end
 
     c = zeros(nVar,1);
     c(IDX.Pgi) = priceImport*dt;
     c(IDX.Pge) = -priceExport*dt;
     c([IDX.sGiP IDX.sGiN IDX.sGeP IDX.sGeN IDX.sBcP IDX.sBcN IDX.sBdP IDX.sBdN]) = trackWeight;
+    if useQ; c(IDX.Qa) = p.Inverter.Qcost*dt; end
+    if useNet; c(IDX.Vsl) = vPenalty; ub(IDX.Vsl) = Inf; end
 
     fcElec = pwl_utils('eval', p.PWL.bkpt_e.x, p.PWL.bkpt_e.y, reference.PH2);
     fixedElec = fcElec - reference.Php + reference.Pev_dis - reference.Pev_ch;
@@ -99,6 +128,55 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     A(7,[IDX.Bch IDX.Bdis]) = [-coefCh coefDis];
     b(7) = baseSOC - p.Batt.SOCmin;
 
+    % Inverter apparent-power polygon, |Q| definition and (opt-in) the
+    % LinDistFlow voltage floor. Appended as extra 'U' rows so the fixed
+    % 7-row block above is untouched.
+    if useQ
+        Npoly = p.Inverter.nPolygonSides;
+        rhsS  = p.Inverter.S_max * cos(pi/Npoly);
+        for kk = 1:Npoly
+            th = 2*pi*(kk-1)/Npoly;
+            % sin(pi)=1.22e-16 in floating point, not 0. Left in place it
+            % gives glpk a ~1e16 coefficient ratio and spurious "no primal
+            % feasible solution" errors -- see dayahead_dispatch.m.
+            cth = cos(th); if abs(cth) < 1e-12; cth = 0; end
+            sth = sin(th); if abs(sth) < 1e-12; sth = 0; end
+            rr = zeros(1,nVar);
+            rr([IDX.Pgi IDX.Pge IDX.Qh]) = [cth -cth sth];
+            A(end+1,:) = rr; b(end+1) = rhsS; ctype(end+1) = 'U';
+        end
+        rr = zeros(1,nVar); rr([IDX.Qh IDX.Qa]) = [ 1 -1];
+        A(end+1,:) = rr; b(end+1) = 0; ctype(end+1) = 'U';
+        rr = zeros(1,nVar); rr([IDX.Qh IDX.Qa]) = [-1 -1];
+        A(end+1,:) = rr; b(end+1) = 0; ctype(end+1) = 'U';
+    end
+    if useNet
+        hasB = useQ && isfield(p.network,'b') && ~isempty(p.network.b);
+        for bi = 1:numel(p.network.buses)
+            % ROW SCALING IS NOT COSMETIC HERE. Voltage sensitivities are
+            % O(1e-5) pu/kW while the power-balance rows are O(1), so an
+            % unscaled voltage row leaves the constraint matrix with a
+            % condition number around 1e7. glpk then returns "no primal
+            % feasible solution" on problems that are plainly feasible --
+            % observed as a scattered, non-monotone failure pattern that
+            % looked like infeasibility but was purely numerical.
+            % Normalising each row to unit largest coefficient (an exact
+            % rescaling, same feasible set) removes it.
+            aRow = -p.network.a(bi);
+            bRow = 0;
+            if hasB; bRow = p.network.b(bi); end
+            sc = max(abs([aRow bRow]));
+            if sc <= 0; sc = 1; end
+            rr = zeros(1,nVar);
+            rr([IDX.Pgi IDX.Pge]) = [aRow -aRow] / sc;
+            if hasB; rr(IDX.Qh) = bRow / sc; end
+            rr(IDX.Vsl) = -1;      % soft: slack absorbs an unavoidable shortfall
+            A(end+1,:) = rr;
+            b(end+1) = (p.network.C(bi) - p.network.Vfloor(bi)) / sc;
+            ctype(end+1) = 'U';
+        end
+    end
+
     vartype = repmat('C', nVar, 1);
     param.msglev = 0;
     [x, fval, status] = glpk(c, A, b, lb, ub, ctype, vartype, 1, param);
@@ -115,6 +193,8 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     actual.Ps     = x(IDX.Ps);
     actual.Pbatt_ch  = x(IDX.Bch);
     actual.Pbatt_dis = x(IDX.Bdis);
+    if useQ; actual.Qh = x(IDX.Qh); else; actual.Qh = 0; end
+    if useNet; info.vShortfall_pu = x(IDX.Vsl); else; info.vShortfall_pu = 0; end
     actual.PH2 = reference.PH2; actual.Php = reference.Php;
     actual.Pev_ch = reference.Pev_ch; actual.Pev_dis = reference.Pev_dis;
     actual.Pbld_ch = reference.Pbld_ch; actual.Pbld_dis = reference.Pbld_dis;

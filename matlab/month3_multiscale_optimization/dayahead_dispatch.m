@@ -213,6 +213,14 @@ function sol = dayahead_dispatch(p, fc)
     if useQ
         Npoly = p.Inverter.nPolygonSides;
         polyTh  = 2*pi*(0:Npoly-1)/Npoly;
+        % Zero the negligible trig terms. sin(pi) evaluates to 1.22e-16
+        % rather than 0 in floating point, and leaving that in the matrix
+        % gives glpk a min|aij|/max|aij| ratio of ~1e16 -- its scaling
+        % cannot recover and it reports "no primal feasible solution" on
+        % problems that are plainly feasible. Verified from glpk's own
+        % diagnostic output.
+        polyCos = cos(polyTh); polyCos(abs(polyCos) < 1e-12) = 0;
+        polySin = sin(polyTh); polySin(abs(polySin) < 1e-12) = 0;
         polyRhs = p.Inverter.S_max * cos(pi/Npoly);
         nPolyRows = nT * (Npoly + 2);   % polygon + two |Qh| rows
     else
@@ -279,9 +287,9 @@ function sol = dayahead_dispatch(p, fc)
         % Inverter apparent-power polygon.
         for k = 1:Npoly
             row = row+1;
-            Aub(row, vix(t,OFF.Pgi)) =  cos(polyTh(k));
-            Aub(row, vix(t,OFF.Pge)) = -cos(polyTh(k));
-            Aub(row, vixQ(t))        =  sin(polyTh(k));
+            Aub(row, vix(t,OFF.Pgi)) =  polyCos(k);
+            Aub(row, vix(t,OFF.Pge)) = -polyCos(k);
+            Aub(row, vixQ(t))        =  polySin(k);
             bub(row) = polyRhs;
         end
         if useQ

@@ -67,15 +67,26 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     slopeT = diff(bkT.y) ./ w;    % 1 x s thermal slope per segment
 
     % Per-block variables: 16 fixed + PH2total(1) + PH2seg(1..s) + u(1..s-1)
-    NV = 16 + 1 + s + (s-1);
+    % Reactive power + network constraint, opt-in exactly as in
+    % dayahead_dispatch.m. Without these the intraday layer is
+    % network-blind and can undo the day-ahead plan's voltage compliance.
+    useQ = isfield(p, 'Inverter');
+    nQ   = useQ * 2;                      % Qh and Qabs per block
+    useNet = isfield(p, 'network') && isfield(p.network, 'enabled') && p.network.enabled;
+
+    NV = 16 + 1 + s + (s-1) + nQ;
     OFF = struct('Pgi',1,'Pge',2,'Ps',3, ...
                   'Bch',4,'Bdis',5,'Ech',6,'Edis',7, ...
                   'Lch',8,'Ldis',9,'Pch',10,'Pdis',11, ...
                   'SB',12,'SE',13,'SL',14,'SP',15,'Php',16,'PH2tot',17);
     segBase = 17; uBase = 17 + s;
+    qOff  = 17 + s + (s-1) + 1;
+    qaOff = qOff + 1;
     ix    = @(block, off) block*NV + off;   % block 0 = stage1, 1..Nscen = stage2 scenarios
     ixSeg = @(block, k)   ix(block, segBase+k);
     ixU   = @(block, k)   ix(block, uBase+k);
+    ixQ   = @(block)      ix(block, qOff);
+    ixQa  = @(block)      ix(block, qaOff);
     nCore = (1+Nscen)*NV;
     slackOff = struct('B',1,'E',2,'L',3,'P',4); % 4 devices x (pos,neg) = 8 slacks
     ixSlack = @(dev, sign) nCore + (slackOff.(dev)-1)*2 + sign; % sign: 1=pos,2=neg
@@ -100,6 +111,11 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         ub(ix(blk,OFF.Pch))  = p.Pipe.Pch_max;
         ub(ix(blk,OFF.Pdis)) = p.Pipe.Pdis_max;
         ub(ix(blk,OFF.Php))  = p.HeatPump.Pmax;
+        if useQ
+            lb(ixQ(blk))  = -p.Inverter.Q_max;
+            ub(ixQ(blk))  =  p.Inverter.Q_max;
+            ub(ixQa(blk)) =  p.Inverter.Q_max;
+        end
         ub(ix(blk,OFF.PH2tot)) = bkE.x(end);
         lb(ix(blk,OFF.SB)) = p.Batt.SOCmin;     ub(ix(blk,OFF.SB)) = p.Batt.SOCmax;
         lb(ix(blk,OFF.SE)) = p.EV.SOCmin;       ub(ix(blk,OFF.SE)) = p.EV.SOCmax;
@@ -128,6 +144,12 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         c(ixSlack(dv{1},1)) = trackWeight;
         c(ixSlack(dv{1},2)) = trackWeight;
     end
+    if useQ
+        c(ixQa(0)) = p.Inverter.Qcost*dt;      % unity-pf tie-breaker
+        for s_ = 1:Nscen
+            c(ixQa(s_)) = scenProb(s_) * p.Inverter.Qcost*dt;
+        end
+    end
 
     rows = {}; bvals = []; ctypeList = '';
     function add_row(coefs_idx, coefs_val, type, bval)
@@ -138,6 +160,40 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         ctypeList(end+1) = type; %#ok<AGROW>
     end
 
+    % Inverter apparent-power polygon, |Q| definition, and (opt-in) the
+    % LinDistFlow voltage floor -- applied to EVERY block so the committed
+    % stage-1 decision and every stage-2 recourse both respect the feeder.
+    function add_inverter_and_network(blk)
+        if useQ
+            Npoly = p.Inverter.nPolygonSides;
+            rhs   = p.Inverter.S_max * cos(pi/Npoly);
+            for kk = 1:Npoly
+                th = 2*pi*(kk-1)/Npoly;
+                cth = cos(th); if abs(cth) < 1e-12; cth = 0; end
+                sth = sin(th); if abs(sth) < 1e-12; sth = 0; end
+                add_row([ix(blk,OFF.Pgi) ix(blk,OFF.Pge) ixQ(blk)], ...
+                        [cth -cth sth], 'U', rhs);
+            end
+            add_row([ixQ(blk) ixQa(blk)], [ 1 -1], 'U', 0);
+            add_row([ixQ(blk) ixQa(blk)], [-1 -1], 'U', 0);
+        end
+        if useNet
+            nb = numel(p.network.buses);
+            hasB = isfield(p.network,'b') && ~isempty(p.network.b);
+            for bi = 1:nb
+                if useQ && hasB
+                    add_row([ix(blk,OFF.Pgi) ix(blk,OFF.Pge) ixQ(blk)], ...
+                        [-p.network.a(bi) p.network.a(bi) p.network.b(bi)], ...
+                        'U', p.network.C(bi) - p.network.Vfloor(bi));
+                else
+                    add_row([ix(blk,OFF.Pgi) ix(blk,OFF.Pge)], ...
+                        [-p.network.a(bi) p.network.a(bi)], ...
+                        'U', p.network.C(bi) - p.network.Vfloor(bi));
+                end
+            end
+        end
+    end
+
     % Stage-1 balances (this slot); fuel cell contributes sum_k slope*PH2seg(k)
     seg0 = arrayfun(@(k) ixSeg(0,k), 1:s);
     add_row([ix(0,OFF.Ps) seg0 ix(0,OFF.Php) ix(0,OFF.Pgi) ix(0,OFF.Pge) ix(0,OFF.Bdis) ix(0,OFF.Bch) ix(0,OFF.Edis) ix(0,OFF.Ech)], ...
@@ -146,6 +202,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcNow.Lheat);
     add_row([seg0 ix(0,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
     add_fillorder(0, seg0);
+    add_inverter_and_network(0);
 
     % Stage-1 SOC recursions (from the GIVEN current state SOCnow)
     add_soc(ix(0,OFF.SB), ix(0,OFF.Bch), ix(0,OFF.Bdis), [], [], p.Batt, dt, SOCnow.Batt);
@@ -169,6 +226,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
             [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcs.Lheat);
         add_row([segS ix(sc,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
         add_fillorder(sc, segS);
+        add_inverter_and_network(sc);
 
         add_soc(ix(sc,OFF.SB), ix(sc,OFF.Bch), ix(sc,OFF.Bdis), ix(0,OFF.SB), 1, p.Batt, dt, []);
         add_soc(ix(sc,OFF.SE), ix(sc,OFF.Ech), ix(sc,OFF.Edis), ix(0,OFF.SE), 1, p.EV, dt, []);
@@ -201,6 +259,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     committed.PH2    = x(ix(0,OFF.PH2tot));
     committed.PH2seg = x(seg0)';
     committed.Php    = x(ix(0,OFF.Php));
+    if useQ; committed.Qh = x(ixQ(0)); else; committed.Qh = 0; end
     committed.Ps     = x(ix(0,OFF.Ps));
     committed.Pbatt_ch  = x(ix(0,OFF.Bch));  committed.Pbatt_dis  = x(ix(0,OFF.Bdis));
     committed.Pev_ch    = x(ix(0,OFF.Ech));  committed.Pev_dis    = x(ix(0,OFF.Edis));
