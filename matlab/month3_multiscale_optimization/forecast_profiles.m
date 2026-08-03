@@ -1,7 +1,7 @@
-function fc = forecast_profiles(seed, uncertaintyScale)
+function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
 %FORECAST_PROFILES Day-ahead / intraday / real-time forecast hierarchy.
 %
-%   fc = FORECAST_PROFILES(seed, uncertaintyScale)
+%   fc = FORECAST_PROFILES(seed, uncertaintyScale, hubScale)
 %
 %   Generates one self-consistent 24-hour scenario at three resolutions
 %   with decreasing uncertainty, matching the three dispatch levels:
@@ -23,9 +23,23 @@ function fc = forecast_profiles(seed, uncertaintyScale)
 %                      main_sensitivity_analysis.m to sweep forecast-error
 %                      severity without changing anything else about the
 %                      scenario.
+%   hubScale         : multiplies the three POWER profiles (solar, Lelec,
+%                      Lheat) so the local demand and PV array match the
+%                      hub's equipment ratings. Defaults to
+%                      hub_sizing().scale, the SAME value
+%                      multiscale_default_params.m applies to those
+%                      ratings -- both read it from hub_sizing.m so the
+%                      two cannot drift apart. Pass 1.0 to reproduce the
+%                      pre-re-siting profiles exactly. Prices and noise
+%                      statistics are NOT scaled: a price is intensive,
+%                      and the noise is multiplicative (a fraction of the
+%                      profile), so a bigger hub sees proportionally
+%                      bigger absolute forecast errors automatically, with
+%                      the same relative uncertainty.
 %
 %   MODEL BOUNDARY -- WHAT `solar` IS: the `solar` series is the PV
-%   array's AVAILABLE DC ELECTRICAL OUTPUT in kW (a ~50 kW-peak array),
+%   array's AVAILABLE DC ELECTRICAL OUTPUT in kW (a 50*hubScale kW-peak
+%   array; 50 kW at hubScale = 1, 233 kW at the default 4.6667),
 %   NOT irradiance in W/m^2. Module-level conversion of sunlight to DC
 %   power (~15-22% for real silicon modules) is upstream of this model
 %   and is already baked into these numbers. That is why the dispatch
@@ -41,6 +55,12 @@ function fc = forecast_profiles(seed, uncertaintyScale)
 
     if nargin < 1 || isempty(seed); seed = 42; end
     if nargin < 2 || isempty(uncertaintyScale); uncertaintyScale = 1.0; end
+    if nargin < 3 || isempty(hubScale)
+        thisFile = mfilename('fullpath');
+        addpath(fileparts(thisFile));
+        hs = hub_sizing();
+        hubScale = hs.scale;
+    end
     rand('seed', seed); %#ok<RAND> -- Octave-compatible seeding
     randn('seed', seed); %#ok<RAND>
 
@@ -51,11 +71,23 @@ function fc = forecast_profiles(seed, uncertaintyScale)
     % ---- Day-ahead (hourly, smooth/idealized) --------------------------
     % 50 = array DC peak in kW (already-generated electrical power), not
     % irradiance -- see the MODEL BOUNDARY note in the header above.
+    %
+    % The three curves are built at hubScale = 1 and multiplied by hubScale
+    % as the LAST step, so scaling is provably shape-preserving: every
+    % ratio between the curves, every peak hour, and the 5 kW overnight
+    % heat floor all move together. (Writing 50*hubScale inline and
+    % forgetting the max(...,5) floor would silently flatten the heat
+    % profile at large hubScale -- doing it in one place makes that
+    % impossible.)
     solar_DA = max(0, 50*sin(pi*(hours-6)/13));
     solar_DA(hours < 6 | hours > 19) = 0;
     Lelec_DA = 20 + 15*exp(-((hours-8).^2)/8) + 25*exp(-((hours-19).^2)/8);
     Lheat_DA = 15 + 12*exp(-((hours-7).^2)/6) + 14*exp(-((hours-21).^2)/10) - 5*exp(-((hours-13).^2)/20);
     Lheat_DA = max(Lheat_DA, 5);
+
+    solar_DA = hubScale * solar_DA;
+    Lelec_DA = hubScale * Lelec_DA;
+    Lheat_DA = hubScale * Lheat_DA;
 
     priceImport_DA = 0.18*ones(24,1);
     priceImport_DA(hours>=1 & hours<=6) = 0.10;
@@ -89,6 +121,7 @@ function fc = forecast_profiles(seed, uncertaintyScale)
     Lelec_ID = max(0, Lelec_ID .* (1 + ar1_noise(96, 0.5, 0.03*uncertaintyScale)));
     Lheat_ID = max(0, Lheat_ID .* (1 + ar1_noise(96, 0.5, 0.03*uncertaintyScale)));
 
+    fc.hubScale = hubScale;   % recorded so any consumer can tell what size it holds
     fc.hours = hours; fc.slots15 = slots15; fc.slots5 = slots5;
     fc.DA.solar = solar_DA; fc.DA.Lelec = Lelec_DA; fc.DA.Lheat = Lheat_DA;
     fc.DA.priceImport = priceImport_DA; fc.DA.priceExport = priceExport_DA;

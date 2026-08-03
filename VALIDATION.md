@@ -1130,3 +1130,491 @@ No folder moved, renamed, merged or split; no efficiency, rating, price
 or emission factor changed (the Task 4a deletion removed unused
 definitions, not values in use); fill-order binaries untouched; no
 existing validation deleted.
+
+---
+
+# Reactive power, full-stack network constraints, and hub sizing
+
+Three modelling upgrades, one commit each. Tasks 1 and 3 legitimately move
+dispatch, cost and voltage results; every changed number is given with a
+before/after and a mechanism. Task 2 changes only what the rolling layers
+are allowed to do.
+
+## Regression anchors — re-verified after all three tasks
+
+| Check | Value | Status |
+|---|---|---|
+| IEEE 33 base (no hub) | 202.677 kW, 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data` assertions | 3715 kW / 2300 kVAr | pass |
+| Curve-fit columns, n=1…150 | MaxErrE 9.1534 → 0.0013 kW at `hubScale = 1` | unchanged |
+| Fill-order binaries | silent normally; still fire under LP relaxation | pass |
+| Exactly one hub | one bus substituted per solve, everywhere | pass |
+| Month 1, Month 2a output | byte-identical to before this session | pass |
+| All 8 `main_month*.m` | run end-to-end | pass |
+
+Everything below at `hubScale = 1, hostBus = 18` reproduces the
+pre-session numbers exactly; the configuration is still reachable as
+`multiscale_default_params(1.0)` + `forecast_profiles(42, 1.0, 1.0)` +
+`ieee33_system_definition(18, 1.0)`.
+
+---
+
+## Task 1 — reactive power dispatch
+
+The hub was modelled at unity power factor. That is not conservative, it
+is unrealistic: it removes the only mechanism by which the hub could
+support voltage, and it was the root cause of several negative findings.
+
+**Added** (`multiscale_default_params.m`): `p.Inverter` with
+`P_design_kW = 123·k` (non-coincident connected load, the same basis
+`feeder_capacity.m` uses), `oversize = 1.15` (the smallest sensible margin
+above the algebraic minimum `S ≥ P/√(1−0.44²) = 1.114·P`),
+`QmaxFrac = 0.44` — **IEEE Std 1547-2018 Clause 5.2, Category B**, which
+requires a DER to inject *and absorb* at least 44% of nameplate apparent
+power (0.90 pf at rated P). Verified against the clause rather than
+assumed. Category A's asymmetric 44%/25% was rejected as the wrong
+category for a DER expected to provide voltage support.
+
+**Linearization.** `P² + Q² ≤ S²` is a circle and cannot enter a MILP. It
+is a regular 12-sided polygon **inscribed** in that circle, so the model
+lies strictly inside the true limit and slightly *under*-uses the
+inverter — the safe direction. Worst-case shortfall `1 − cos(π/12) = 3.4%`.
+
+**Q reaches the network.** `network_verify.m` takes an optional fourth
+argument and subtracts the dispatched Q from `busQ` at the host bus; every
+caller passes it. `lindistflow_sensitivity.m` gained `b_j = −ΣX/(1000·V²)`
+alongside `a_j`.
+
+### Bugs found and fixed while doing this
+
+| Bug | Symptom | Fix |
+|---|---|---|
+| **Q pinned at −Q_max** | With no cost and no active voltage constraint the optimizer is *indifferent* to Q; `glpk` returned an arbitrary vertex — full absorption in all 24 hours, which would have silently **degraded** voltage in every verify-only result | 1e−4 $/kvarh tie-breaker toward unity pf. Justified physically (reactive conduction loss) and normatively (IEEE 1547's default mode is constant pf at unity). Total effect on daily cost: **$0.000000** |
+| **Sign error on the Q coefficient** | Wrote `−b_j` in the ≤-form row; Q went *negative* (−27.86 kvar) and voltage got *worse* (0.9101 vs 0.9120 pu) | `C_j` already carries the host bus's nominal reactive load, so an injection subtracts from it: `V_j = C_j + a_j·P − b_j·Q`, and the ≤-form coefficient is `+b_j` |
+| **`vixQ` defined before `vix`** | Anonymous functions capture at definition time | Moved after |
+
+### Does LinDistFlow still degenerate to a scalar cap? **No — and here is the measurement**
+
+This was the explicit question. Under unity power factor every bus voltage
+is affine and monotone in hub import, so all 32 per-bus rows were scalar
+multiples of one another and the set collapsed exactly to `import ≤ L_host`.
+That was an artifact of having no Q, not a property of the network.
+
+With Q the row is `V_j = C_j + a_j·P − b_j·Q`, and the ratio `b_j/a_j` is
+the X/R ratio of the branches bus *j* shares with the hub's path:
+
+| Host bus | `b_j/a_j` range | distinct values | rows colinear? |
+|---|---|---|---|
+| 18 (previous) | 0.5093 – 0.8571 | 16 | **NO** |
+| 25 (current) | 0.5094 – 0.7125 | **5** | **NO** |
+
+Non-degenerate at both sitings, but **thinner at bus 25**, and that is
+reported rather than glossed: from a short lateral, all 29 buses outside
+it share exactly the same two trunk branches. Five independent directions
+is not one, but 29 of the 32 rows are duplicates — a property of radial
+topology and hub placement, not of the method.
+
+### Before / after (at `hubScale = 1`, so this isolates Task 1)
+
+| Quantity | Unity pf | With Q |
+|---|---|---|
+| Peak Q injected | 0.00 kvar | 27.86 kvar |
+| Peak active import | 104.19 kW | **104.19 kW** (unchanged) |
+| Exact min voltage | 0.9120 pu | **0.9138 pu** |
+| No-hub reference | 0.9131 pu | 0.9131 pu |
+| Day-ahead cost | $43.0277 | $43.0305 (+0.01%) |
+
+The hub holds the floor **without curtailing active power** — the finding
+the whole task existed to produce. Reactive support removes the hub's
+voltage *penalty*; it does not turn a small hub into feeder-wide voltage
+regulation, and that limit is printed alongside.
+
+---
+
+## Task 2 — network constraints at intraday and real time
+
+`p.network` was read by `dayahead_dispatch.m` alone. The plan was
+compliant and the rolling layers walked away from it: closed-loop
+do-no-harm held in **4 of 9** scenarios, realized peak 97.45 kW against a
+90.00 kW cap. Both `intraday_dispatch.m` and `realtime_balance.m` now
+carry the voltage rows and their own inverter polygon and Q variable.
+
+**Result at `hubScale = 1`, host bus 18: 9 of 9**, across 3 seeds × 3
+uncertainty levels, under the exact power flow after intraday and
+real-time correction. Cost premium **$0.0049/day (+0.009%)**. (Task 3
+re-sites the hub and this test reads differently there — see Task 3's
+section, which gives the magnitude rather than only the boolean.)
+
+**Mechanism, and it is not "more constraints".** Realized peak became
+101.7–109.6 kW — *higher* than the 90 kW the old day-ahead-only cap forced
+— because compliance is achieved with reactive power instead of by
+curtailing import. Reactive injection scaled with the disturbance, ~23 kvar
+at nominal uncertainty rising to ~38 kvar at 3×.
+
+### Three bugs found
+
+1. **A hard real-time voltage floor is genuinely infeasible.** Real time
+   must balance actual load with the fuel cell, heat pump and EV already
+   fixed at intraday setpoints; when demand exceeds what the floor permits
+   there is no feasible point and `glpk` returns status 10. A real
+   controller cannot refuse to serve load either. The real-time floor is
+   therefore **soft** (heavily penalised slack) and the residual is
+   reported rather than the run dying. Day-ahead and intraday keep hard
+   floors — they have the freedom to honour them.
+2. **`IDX.Vsl` hardcoded to 16** while `nVar = 14` when reactive power is
+   off — out-of-bounds whenever the network was enabled without the
+   inverter. Optional variable indices are now assigned dynamically.
+3. **A floating-point conditioning trap, found from `glpk`'s own
+   diagnostic rather than guessed.** `sin(pi)` evaluates to 1.22e−16, not
+   0, so the polygon rows carried a coefficient of 1e−16 beside
+   coefficients of 1. `glpk` reported `min|aij|/max|aij| = 8.2e15`, its
+   scaling could not recover, and it declared *"LP HAS NO PRIMAL FEASIBLE
+   SOLUTION"* on plainly feasible problems — a scattered, non-monotone
+   failure pattern (**22 of 78** test points) that looked like
+   infeasibility and was not. Negligible trig terms are now zeroed in all
+   three dispatch files; failures went **22 → 0**. Row normalisation of the
+   voltage constraints was added at the same time.
+
+### Side-finding: realized cost carries ~1% solver-vertex sensitivity
+
+Cases 3 and 4 realized cost moved ($50.49 → $49.99, $49.74 → $49.21) even
+though **Q is exactly 0.0000 kvar** in the default configuration and
+day-ahead cost is bit-identical at 43.027729. Cause: the 12 polygon rows,
+which never bind (net P peaks at 103.88 kW against a 136.63 kW limit),
+change *which* of several cost-equivalent vertices `glpk` returns in the
+degenerate intraday/real-time LPs. Verified by construction — `S_max` huge
+reproduces the pre-Task-1 value exactly; `Q_max = 0` with finite `S_max`
+does not. Consistent across seeds (−1.06%, −0.94%, −1.56%).
+
+**Every realized-cost figure in this project should be read with roughly
+1% tolerance**, because the intraday and real-time LPs are degenerate and
+realized cost is not what they optimize.
+
+---
+
+## Task 3 — hub sizing
+
+### The problem, stated precisely
+
+At 2.79% of feeder load the hub could not move any feeder-wide quantity.
+Two headline findings — *"PWL segment count does not change grid
+outcomes"* (4c) and *"reserve margin does not move voltage"* (4b) — were
+measured on that hub, so **neither sweep could have come out any other
+way**. They were reporting the hub's size, not the mechanism each claimed
+to study.
+
+### The choice: option (b), re-site to bus 25 and scale
+
+Option (a) — size the hub against bus 18 — is where it already was
+(104 kW peak = 115% of that bus's 90 kW load), so it would have left both
+findings exactly as untestable as before.
+
+**Why the host bus decides the size.** The do-no-harm floor for a hub at
+bus *h* is, per monitored bus *j*,
+`C_j + a_j·P − b_j·Q ≥ C_j + a_j·L_h`, and dividing by `a_j` (negative)
+gives
+
+```
+P  ≤  L_h + (b_j/a_j)·Q
+```
+
+The sensitivities **cancel**. The largest import a hub may draw without
+harming any bus is set by `L_h` — the nominal load of the bus it replaces
+— and by nothing else. Voltage sensitivity decides how much a kW *matters*;
+it does not decide how many kW are *allowed*. Bus 18 can therefore never
+host a feeder-relevant hub.
+
+| Bus | `a_h` (pu/kW) | `L_h` (kW) | `|a_h|·L_h` (pu) |
+|---|---|---|---|
+| 18 | −6.90e−05 | 90 | 0.0062 |
+| 25 | −1.77e−05 | 420 | **0.0074** |
+| 32 | −3.93e−05 | 210 | 0.0083 |
+
+Near-identical **local** authority from very different sizes; utterly
+different feeder-wide. Bus 32 edges both out but sits on the same lateral
+as bus 33, which Month 2b uses as its deliberately adverse siting; bus 25
+is the feeder's largest single load and the bus the siting study already
+identified as best for losses.
+
+**The scale factor is derived, not chosen**:
+`hub_sizing().scale = L(25)/L(18) = 420/90 = 4.6667`. The hub's size
+*relative to its host* is unchanged (peak import stays 115.3% of host-bus
+load, the do-no-harm cap binds by the same relative margin); only its size
+*relative to the feeder* moves. One variable, and it is the one the sweeps
+could not resolve.
+
+**What was scaled** (extensive only): `PWL.FC_H2_max`, `HeatPump.Pmax`,
+`Inverter.P_design_kW` (hence `S_max`, `Q_max`), `Emax`/`Pch_max`/`Pdis_max`
+for battery, EV, building and pipe, and the `solar`/`Lelec`/`Lheat`
+profiles. **What was not**: every efficiency, every efficiency curve, every
+SOC band, every self-discharge rate, every price, every emission factor,
+every reserve fraction, the diversity factor, `eta_PV`, `COP`, `Qcost`.
+
+Scaling `FC_H2_max` leaves the curves untouched by construction:
+`pwl_utils('fit')` samples η at load *fractions*, so every breakpoint
+coordinate scales and every segment **slope** is bit-identical
+(max |Δslope| = 1.1e−16 across all five segments).
+
+### Verified: the model is exactly homogeneous of degree 1 in hub size
+
+With no network constraint active, multiplying every rating and profile by
+*k* multiplies every power, energy and cost by *k* exactly:
+
+| Quantity | `hubScale = 1` | `hubScale = 4.6667` | ratio (expect 4.666667) |
+|---|---|---|---|
+| Planned cost | 43.027729 | 200.796081 | 4.66666700 |
+| Realized cost | 49.207270 | 229.633941 | 4.66666700 |
+| CO2 | 148.0364 | 690.8365 | 4.66666700 |
+| Day-ahead peak import | 104.1882 | 486.2115 | 4.66666700 |
+| Realized peak import | 103.8826 | 484.7853 | 4.66666700 |
+| Fuel-cell fuel | 111.9574 | 522.4681 | 4.66666700 |
+
+**This is the control that makes the study interpretable**: any difference
+the re-siting produces is attributable to the *network*, because nothing
+else in the model responds to size at all.
+
+### Penetration, before and after
+
+| | Before | After |
+|---|---|---|
+| Host bus | 18 | 25 |
+| Host-bus load | 90 kW | 420 kW |
+| Hub peak import | 103.8 kW | **484.2 kW** |
+| **% of 3715 kW feeder** | **2.79%** | **13.03%** |
+| **% of host-bus load** | **115.3%** | **115.3%** (by construction) |
+| Base voltage at host bus | 0.9131 pu (feeder minimum) | 0.9694 pu |
+
+### Two bugs the re-sizing exposed
+
+Both were **latent before this session** and are fixed at the source.
+
+**1. The EV state-of-charge bound was unenforceable while the fleet was
+away.** At the larger size the intraday optimizer found it worthwhile to
+run the EV fleet to exactly `SOCmin = 0.20` in the last plugged-in slot of
+the morning — legal. One slot later the fleet departs, `Pch` and `Pdis` are
+both bounded to zero, self-discharge takes the state to 0.19990, and
+`glpk` reported *"PROBLEM HAS NO PRIMAL FEASIBLE SOLUTION"*: a decision
+feasible at step *k* made step *k+1* infeasible.
+
+The bug is not the size. `SOCmin` is an **operational** limit and an
+operational limit can only be honoured by an action; while the fleet is
+away the SOC row contains no decision variable at all, so imposing the
+band there does not constrain a choice, it asserts that self-discharge does
+not happen. `ev_soc_bounds.m` now returns the physical `[0, 1]` while the
+fleet is away and the usable band while it is plugged in. Cost of the
+relaxation, quantified: over the whole 11-hour absence free decay removes
+2.2% of the state, so a vehicle departing at the 20% floor returns at
+about 19.6% — the bound is loosened by at most ~0.4 percentage points, only
+while nothing can be done about it, and `Pdis` is zero throughout.
+
+**2. `sqrt()` of a negative zero made an entire cost calculation complex.**
+This one silently corrupted a reported finding, so it gets the full
+account.
+
+The electrical efficiency curve is `η(u) = 0.30 + 0.35·√u − 0.28·u²`. A
+MILP solver routinely returns `−1.19e−13` for a variable that is really
+zero, so `u` can be very slightly negative and **one** such element makes
+the whole output array complex. Octave's `max(X, 0)` on a complex array
+does not compare real parts — it compares **magnitudes**. So the standard
+idiom for splitting a net exchange,
+
+```matlab
+Pimp = max(Pnet, 0);   Pexp = max(-Pnet, 0);
+```
+
+returned `Pimp = −1.29` for `Pnet = −1.29 + 0i`, because `|−1.29| > |0|`.
+A 4.4 kWh export was priced as a 4.4 kWh import at the evening tariff. No
+error, no warning — just a plausible-looking wrong number, and it appeared
+only when the LP happened to return a *negative* zero rather than a
+positive one, which is why it surfaced when the hub was re-sized and not
+before.
+
+**Consequence: the "nSegments = 2 outlier" is withdrawn.**
+
+| n | Gap(%) as reported | Gap(%) corrected | Optimism |
+|---|---|---|---|
+| 1 | −4.36 | −4.36 | −0.1018 |
+| **2** | **+24.80** | **+1.45** | +0.0058 |
+| 5 | −0.12 | −0.12 | −0.0025 |
+| 10 | −0.02 | −0.02 | −0.0004 |
+
+23.35 of those 24.80 percentage points were arithmetic. The row was
+reported for several sessions as "a genuine outlier — worse than n=1",
+with an explanatory section built on top of it. It was not an outlier:
+`|gap|` now falls **monotonically** with segment count. What survives is
+the part that was actually load-bearing — **the sign of Optimism still
+predicts the sign of Gap in every row**. Fixed at the source in
+`fc_true_output.m`, which clamps the fuel vector at zero (a fuel cell
+cannot consume negative fuel) so no downstream quantity can be complex.
+
+The correction applies at **both** hub sizes; it is a bug fix, not a size
+effect.
+
+### Did the flat findings become visible? **No — and that is the result**
+
+This is what Task 3 existed to determine, and the instruction was to say so
+if they stayed flat.
+
+**Month 4b — reserve and uncertainty vs. voltage:**
+
+| Measure | Before (2.79% hub) | After (13.03% hub) |
+|---|---|---|
+| Feeder-minimum V span, all 3 sweeps | 0.0007 pu | **0.0002 pu** |
+| Host-bus V span, all 3 sweeps | not measured | **0.0007 pu** |
+| Feeder loss-energy span | not measured (added this session) | 1.8 kWh/day (on 4516) |
+
+A 4.7× larger hub produced a *smaller* feeder-minimum span, because the bus
+that can host a big hub is electrically far from the bus that sets the
+feeder minimum. **Host-bus voltage was added to close that objection** —
+the hub's own bus spans 0.0007 pu across the same sweeps, so the
+insensitivity is not an artifact of measuring at the wrong place. The
+direction remains consistent and physically sensible (more reserve raises
+voltage on every grid row, more uncertainty lowers it down every column):
+"directionally as expected, practically irrelevant", not "no effect".
+
+**Month 4c — PWL fidelity vs. grid outcomes:**
+
+| Measure | Before | After |
+|---|---|---|
+| Min-V span across n=1…150 | 0.0017 pu | **0.0004 pu** |
+| Loss-energy span | 2.4 kWh/day | 2.9 kWh/day |
+| Curve-fit error range | 9.1534 → 0.0013 kW | 42.7160 → 0.0061 kW |
+
+Same conclusion, now with teeth: PWL fidelity is a **cost-accuracy**
+instrument, not a network one. Previously that was guaranteed by the hub's
+size; now it is a finding.
+
+**And a third claim survived a real test.** Month 4d's "a 0.95 pu floor
+everywhere is structurally infeasible" needed the hub to export 352 kW
+(bus 18) / 1946 kW (bus 33) at the old siting against ~15 kW of capability.
+At the new siting it needs 7942 kW / 7066 kW against 551 kW — still an
+order of magnitude short.
+
+### What legitimately moved, with mechanisms
+
+| Quantity | Before | After | Mechanism |
+|---|---|---|---|
+| Case 1 cost / CO2 | $176.37 / 366.1 kg | $823.08 / 1708.5 kg | pure 4.667× scaling |
+| Case 4 cost / CO2 | $49.21 / 148.0 kg | $229.63 / 690.8 kg | pure 4.667× scaling |
+| Case 4 vs Case 1 saving | 72.1% | **72.1%** | ratio, scale-invariant |
+| Feeder capacity (design) | 104.55 kW | 487.90 kW | 0.85 × scaled connected load |
+| Case 4 realized peak | 103.88 kW | 484.79 kW | pure scaling |
+| Feeder loss reduction vs. no hub | −248.3 kWh/day (5.1%) | **−348.8 kWh/day (7.2%)** | the hub displaces a 420 kW load carried by trunk branches that serve the whole feeder, not a 90 kW load at the end of one radial |
+| Min voltage with hub | 0.9120 pu (at host bus 18) | 0.9128 pu (at bus **18**, hub at **25**) | the hub now degrades a bus on a *different lateral*, reached only through shared trunk impedance — an effect the old configuration structurally could not show, since host bus and worst bus were the same node |
+| Host-bus V, mean vs. base | +0.0059 pu | +0.0064 pu | |
+| Peak Q used (day-ahead, floor active) | 27.86 kvar | 129.98 kvar | 4.7× the kvar buys 0.0003 pu instead of 0.0018 pu: bus 25's `b` is 4.5× weaker, so the extra reactive power almost exactly cancels the weaker lever — the same trade `hub_sizing.m` describes from the other side |
+| Case 5 PWL benefit | 0.57% / 1.66% | **0.26% / 1.47%** (delivered / gate) | the ~1% vertex sensitivity documented under Task 2 |
+| Closed-loop do-no-harm | 9 of 9 | **0 of 9 at a 1e−9 pu tolerance**, worst shortfall **2.89e−06 pu** | see below |
+| n=150 MILP solve time | 169.1 s | 30.1 / 36.3 / 61.7 s on three repeats | *identical* MILP structure, different numbers — branch-and-bound instance sensitivity, plus 2× run-to-run variance on the very same instance; see below |
+
+### The two results that need more than a row
+
+**Do-no-harm went from 9 of 9 to 0 of 9, and the magnitude is the whole
+story.** The worst shortfall across all nine scenarios is **2.89e−06 pu**
+— about 37× `distflow_bfs`'s own 7.9e−08 pu convergence floor, so
+resolvable rather than noise, but **2208× smaller than LinDistFlow's own
+6.38e−03 pu base-case error**.
+
+*Why it flipped.* At bus 18 the hub sat **on** the binding bus: the floor
+and the achieved operating point were evaluated at the same node with the
+same large linearization bias, the bias cancelled, and a comfortable
++7e−04 pu true margin was left. At bus 25 the binding bus is still 18, on a
+different lateral, reached only through two shared trunk branches —
+`dV(18)/dP = −3.65e−06 pu/kW`, twenty times weaker. The constraint no
+longer clamps the schedule comfortably *inside* the floor; it clamps it
+almost exactly *on* it, and the quadratic term LinDistFlow drops then lands
+a few parts per million on the wrong side.
+
+*The tolerance has deliberately not been widened.* The 1e−9 pu test was
+always far tighter than the model's own accuracy; what changed is that the
+margin is no longer large enough to hide that. The scripts now print the
+**signed margin** next to the boolean, because the boolean alone hides the
+constraint's entire effect: verify-only misses the floor by 2.79e−04 pu and
+co-optimized by 1.32e−06 pu, so the constraint removes **99.5%** of the
+harm. The honest statement is *"the floor is held to within 3e−06 pu"* —
+not "held", and not "failed". **A guarantee stated in LinDistFlow terms
+cannot be tighter than LinDistFlow**, and the re-sizing is what finally made
+that visible.
+
+**The tractability wall is not where a single timed solve says it is.**
+Two independent sources of variance, both measured:
+
+- *Across instances*: n=150 took **169.1 s** before the re-sizing and
+  **30.1 s** after — same variables, same rows, same 3576 fill-order
+  binaries, only different numbers in them.
+- *Across runs of the identical instance*: three executions of the unchanged
+  script returned **30.1 s, 36.3 s and 61.7 s** at n=150 — a 2× spread from
+  machine state alone, which lands directly on the number because every
+  count above n=36 is a single timed solve.
+
+The superlinear shape reproduces every time and is the result. The specific
+second count is not, and quoting "149.7 s at n=150" (as `README.md`
+previously did) overstates what one timed solve can establish. Both the
+script and the README now report the shape and the variance instead.
+
+### Scale-dependent constants that had to be fixed
+
+Three quantities were "effectively unbounded placeholders" or penalty
+weights that did **not** scale, and would have silently become real
+constraints — or silently weakened — as the hub grew. All now scale via
+`hub_scale_of(p)`:
+
+| Constant | Where | Why it must scale |
+|---|---|---|
+| `GRID_CAP = 1000` | all three dispatch files | a placeholder that does not scale stops being a placeholder at some size |
+| `vPenalty = 1e4` | `realtime_balance.m` | competes against energy-cost terms that are proportional to hub size |
+| `trackWeight = 30` | `simulate_multiscale_day.m` | multiplies a *dimensionless* SOC against cost terms that scale, so a bigger hub would silently track its own plan more loosely |
+
+Scaling them is what makes the homogeneity check above come out exact, and
+therefore what makes the re-siting a controlled comparison rather than a
+confounded one.
+
+### Narrative corrections forced by the move
+
+Stale text that its own numbers contradicted, found by reading the output:
+
+- Month 3 said losses fall because of "less current on the long radial to
+  bus 18" — the hub is no longer on that radial. Rewritten to the actual
+  mechanism (trunk branches serving the whole feeder) and extended with the
+  remote-bus degradation finding.
+- Month 3 said "worst moment leaves bus *25*" while printing bus 18 as the
+  worst bus. Now uses the measured bus.
+- Month 3's "raising the building's limit from 47 to 20 kW" — a hardcoded
+  scale-1 counterfactual against a scaled rating. Now expressed as a
+  factor, with the homogeneity result as the justification for why a
+  factor-based counterfactual transfers exactly.
+- Month 4a's reliability threshold sweep used a hardcoded `[90 95 100 106
+  110]` kW list that sat entirely below every case's peak after scaling.
+  Now expressed as fractions of the design capacity, so it brackets the
+  peaks at any hub size.
+- Month 4a quoted "Case 5 (0.20%–1.47%)" as a literal in two places — a
+  number that had already gone stale under Task 2 before this session
+  touched it. Both now read the computed values; the one in the header
+  comment was removed entirely rather than re-pinned.
+- Month 4d's closing paragraph still claimed the constraint "collapses to a
+  scalar" and was "enforced only on the day-ahead layer" — both fixed by
+  Tasks 1 and 2, and both left contradicting the corrected sections above
+  them. Rewritten with what actually remains.
+- `README.md`'s Month 4c/4d sections still described the pre-reactive-power
+  model throughout (4 of 9, day-ahead only, scalar cap). Rewritten.
+
+## Files touched
+
+- **Task 1**: `multiscale_default_params.m`, `dayahead_dispatch.m`,
+  `network_verify.m`, `lindistflow_sensitivity.m`,
+  `main_month3_multiscale_dispatch.m`, `main_month4d...m`
+- **Task 2**: `intraday_dispatch.m`, `realtime_balance.m`,
+  `simulate_multiscale_day.m`, `main_month4d...m`
+- **Task 3**: new `hub_sizing.m`, `hub_scale_of.m`, `ev_soc_bounds.m`,
+  `fc_true_output.m`; `multiscale_default_params.m`, `forecast_profiles.m`,
+  `ieee33_system_definition.m`, all three dispatch files,
+  `simulate_multiscale_day.m`, `main_month2b...m`, `main_month3...m`,
+  `main_month4a...m`, `main_month4b...m`, `main_month4c...m`,
+  `main_month4d...m`
+- **Docs**: `README.md`, `VALIDATION.md`
+
+No folder moved, renamed, merged or split. Exactly one hub throughout. No
+efficiency, efficiency curve, price or emission factor changed by any of
+the three tasks. No existing finding removed, softened or buried — one was
+**withdrawn as a bug** (the n=2 outlier), with the arithmetic that caused
+it documented in full.

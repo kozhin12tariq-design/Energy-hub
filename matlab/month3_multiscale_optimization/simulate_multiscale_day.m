@@ -119,7 +119,13 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
 
     scenMult = [0.6, 1.0, 1.4];
     scenProb = [0.25; 0.5; 0.25];
-    trackWeight = 30;
+    % Penalty on the intraday layer's deviation from the day-ahead SOC
+    % trajectory. It multiplies a DIMENSIONLESS state of charge while the
+    % energy-cost terms it competes against are proportional to hub size,
+    % so it must scale with the hub or a bigger hub would silently track
+    % its own plan more loosely. Scaling keeps the layer's behaviour
+    % invariant under a pure change of size.
+    trackWeight = 30 * hub_scale_of(p);
 
     Pg_imp5 = zeros(288,1); Pg_exp5 = zeros(288,1); PH2_5 = zeros(288,1);
     SOCbatt5 = zeros(288,1); Q5 = zeros(288,1);

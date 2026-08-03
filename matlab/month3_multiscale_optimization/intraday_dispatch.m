@@ -92,7 +92,9 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     ixSlack = @(dev, sign) nCore + (slackOff.(dev)-1)*2 + sign; % sign: 1=pos,2=neg
     nVar = nCore + 8;
 
-    GRID_CAP = 1000;
+    % Nominally-unbounded grid exchange; scales with the hub so it stays a
+    % placeholder instead of becoming a silent import limit (hub_scale_of.m).
+    GRID_CAP = 1000 * hub_scale_of(p);
 
     lb = zeros(nVar,1); ub = zeros(nVar,1);
     blocks_fc = [fcNow; fcNextScenarios(:)];
@@ -118,9 +120,14 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         end
         ub(ix(blk,OFF.PH2tot)) = bkE.x(end);
         lb(ix(blk,OFF.SB)) = p.Batt.SOCmin;     ub(ix(blk,OFF.SB)) = p.Batt.SOCmax;
-        lb(ix(blk,OFF.SE)) = p.EV.SOCmin;       ub(ix(blk,OFF.SE)) = p.EV.SOCmax;
         lb(ix(blk,OFF.SL)) = p.Building.SOCmin; ub(ix(blk,OFF.SL)) = p.Building.SOCmax;
         lb(ix(blk,OFF.SP)) = p.Pipe.SOCmin;     ub(ix(blk,OFF.SP)) = p.Pipe.SOCmax;
+        % EV: the usable band applies only while the fleet is plugged in.
+        % Away from the charger its SOC is pure decay with no decision in
+        % it, and imposing SOCmin there makes the MILP infeasible the
+        % moment the previous slot leaves the state on the bound. See
+        % ev_soc_bounds.m for the full account.
+        [lb(ix(blk,OFF.SE)), ub(ix(blk,OFF.SE))] = ev_soc_bounds(p, evb);
         for k = 1:s
             ub(ixSeg(blk,k)) = w(k);
         end

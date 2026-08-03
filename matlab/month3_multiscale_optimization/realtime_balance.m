@@ -53,7 +53,9 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
 %     info        : status, cost, imbalance corrected (kW)
 
     dt = 1/12; % 5 minutes
-    GRID_CAP = 1000;
+    % Nominally-unbounded grid exchange; scales with the hub so it stays a
+    % placeholder instead of becoming a silent import limit (hub_scale_of.m).
+    GRID_CAP = 1000 * hub_scale_of(p);
     trackWeight = 50;
 
     % variables: [Pg_imp Pg_exp Ps Pbatt_ch Pbatt_dis  slackGi+ slackGi- slackGe+ slackGe- slackBc+ slackBc- slackBd+ slackBd-]
@@ -81,7 +83,13 @@ function [actual, SOCbattNext, info] = realtime_balance(p, SOCbattNow, reference
     if useQ;   IDX.Qh = nextIdx; IDX.Qa = nextIdx+1; nextIdx = nextIdx+2; end
     if useNet; IDX.Vsl = nextIdx;                    nextIdx = nextIdx+1; end
     nVar = nextIdx - 1;
-    vPenalty = 1e4;   % $ per unit of (row-normalised) voltage shortfall
+    % $ per unit of (row-normalised) voltage shortfall. Scaled with the hub
+    % for the same reason trackWeight need not be: the energy-cost terms it
+    % competes against are proportional to hub size, so a fixed penalty
+    % would silently weaken as the hub grows. Scaling it keeps the layer's
+    % behaviour invariant under a pure change of size, which is what makes
+    % the re-siting study a controlled comparison.
+    vPenalty = 1e4 * hub_scale_of(p);
 
     lb = zeros(nVar,1);
     ub = zeros(nVar,1);

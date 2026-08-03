@@ -88,7 +88,11 @@ function sol = dayahead_dispatch(p, fc)
 
     %% Bounds
     lb = zeros(nVar,1); ub = zeros(nVar,1);
-    GRID_CAP = 1000;
+    % Nominally-unbounded grid exchange. It must scale with the hub, or it
+    % silently turns into a real (and undocumented) import limit on a large
+    % hub while looking like a placeholder. 1000 kW at hubScale = 1 is ~10x
+    % the hub's own peak import, and stays 10x at any size.
+    GRID_CAP = 1000 * hub_scale_of(p);
     for t = 1:nT
         ub(vix(t,OFF.Pgi))  = GRID_CAP;
         ub(vix(t,OFF.Pge))  = GRID_CAP;
@@ -104,9 +108,12 @@ function sol = dayahead_dispatch(p, fc)
         ub(vix(t,OFF.Php))  = p.HeatPump.Pmax;
         ub(vix(t,OFF.PH2tot)) = p.PWL.FC_H2_max;
         lb(vix(t,OFF.SB)) = p.Batt.SOCmin;     ub(vix(t,OFF.SB)) = p.Batt.SOCmax;
-        lb(vix(t,OFF.SE)) = p.EV.SOCmin;       ub(vix(t,OFF.SE)) = p.EV.SOCmax;
         lb(vix(t,OFF.SL)) = p.Building.SOCmin; ub(vix(t,OFF.SL)) = p.Building.SOCmax;
         lb(vix(t,OFF.SP)) = p.Pipe.SOCmin;     ub(vix(t,OFF.SP)) = p.Pipe.SOCmax;
+        % EV state of charge -- see ev_soc_bounds.m. While the vehicle is
+        % away from the charger its SOC is not a decision, it is a
+        % consequence, and the usable band cannot be imposed on it.
+        [lb(vix(t,OFF.SE)), ub(vix(t,OFF.SE))] = ev_soc_bounds(p, evAvail(t));
         for k = 1:s
             ub(vixSeg(t,k)) = w(k);
         end
