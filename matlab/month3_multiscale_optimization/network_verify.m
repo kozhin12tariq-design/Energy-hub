@@ -1,4 +1,4 @@
-function nv = network_verify(sys, netInjection_kW, opts)
+function nv = network_verify(sys, netInjection_kW, opts, netQ_kvar)
 %NETWORK_VERIFY Exact IEEE 33 power-flow check of a completed dispatch.
 %
 %   nv = NETWORK_VERIFY(sys, netInjection_kW, opts)
@@ -21,15 +21,19 @@ function nv = network_verify(sys, netInjection_kW, opts)
 %   ONE HUB. The substitution touches exactly one bus, sys.hostBus. There
 %   is never more than one hub in the study.
 %
-%   REACTIVE POWER -- READ THIS BEFORE QUOTING VOLTAGES. The hub is
-%   modelled at unity power factor and its host bus keeps its NOMINAL
-%   reactive load; the dispatch has no Q variable to give. Real inverters
-%   (PV, battery, fuel cell) exchange reactive power and would move these
-%   voltages in either direction: absorbing Q depresses local voltage
-%   further, injecting Q supports it. The voltages reported here are
-%   therefore OPTIMISTIC relative to a hub that draws Q, and are best read
-%   as the unity-power-factor case rather than a bound. Adding Q as a
-%   dispatch variable is a genuine extension this model does not attempt.
+%   REACTIVE POWER. The hub's grid-facing inverter now dispatches reactive
+%   power (dayahead_dispatch.m), within its apparent-power circle and the
+%   IEEE 1547-2018 Category B limit of +/-44% of nameplate S. Pass the
+%   hub's Q series as the 4th argument and the host bus's reactive load is
+%   adjusted by it at each timestep: a Q INJECTION (positive) reduces the
+%   net reactive draw at that bus and raises local voltage; absorption
+%   lowers it. This is the mechanism by which the hub can support voltage
+%   at all, and it was absent from every earlier result in this project.
+%
+%   Omit the 4th argument and the hub is treated at unity power factor
+%   exactly as before, so older comparisons remain reproducible. Which
+%   mode produced a given number matters: unity-power-factor voltages are
+%   the no-support case, not a bound.
 %
 %   Inputs
 %     sys             : ieee33_system_definition() struct (network + host bus)
@@ -64,6 +68,18 @@ function nv = network_verify(sys, netInjection_kW, opts)
     if ~isfield(opts, 'stride');  opts.stride  = 1; end
 
     netInjection_kW = netInjection_kW(:);
+    if nargin < 4 || isempty(netQ_kvar)
+        netQ_kvar = zeros(size(netInjection_kW));   % unity power factor
+        nv.reactiveDispatched = false;
+    else
+        netQ_kvar = netQ_kvar(:);
+        if numel(netQ_kvar) ~= numel(netInjection_kW)
+            error('network_verify:qLength', ...
+                'netQ_kvar (%d) must match netInjection_kW (%d).', ...
+                numel(netQ_kvar), numel(netInjection_kW));
+        end
+        nv.reactiveDispatched = true;
+    end
     steps = 1:opts.stride:numel(netInjection_kW);
     nS = numel(steps);
 
@@ -77,8 +93,12 @@ function nv = network_verify(sys, netInjection_kW, opts)
     for k = 1:nS
         busP = sys.busP_base;
         busP(sys.hostBus) = netInjection_kW(steps(k));   % ONE bus, the one hub
+        busQ = sys.busQ_base;
+        % Q injection reduces the host bus's net reactive load (loads are
+        % positive in this convention), which is what raises local voltage.
+        busQ(sys.hostBus) = sys.busQ_base(sys.hostBus) - netQ_kvar(steps(k));
         [V, ~, Ploss, ~, ~, ~, conv] = ...
-            distflow_bfs(sys.branches, busP, sys.busQ_base, sys.Vbase_kV);
+            distflow_bfs(sys.branches, busP, busQ, sys.Vbase_kV);
         Vpu = abs(V) / sys.Vbase_kV;
         [mv, mb] = min(Vpu);
         Vmin_series(k) = mv;

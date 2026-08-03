@@ -107,18 +107,37 @@ function ldf = lindistflow_sensitivity(sys)
         C(j) = 1 - s/den;
     end
 
-    % Sensitivity: only branches shared by the two root paths carry the
-    % hub's power on the way to bus j.
-    a = zeros(n,1);
+    % Sensitivities: only branches shared by the two root paths carry the
+    % hub's power on the way to bus j. a_j is built from series RESISTANCE
+    % (active power), b_j from series REACTANCE (reactive power) in exactly
+    % the same way -- LinDistFlow treats the two symmetrically.
+    %
+    % These are NOT proportional to one another. b_j/a_j = (sum X)/(sum R)
+    % over each bus's shared path, and on IEEE 33 that ratio varies from
+    % about 0.51 to 0.86 depending on which branches are shared. That is
+    % what makes the per-bus voltage rows linearly independent once Q is a
+    % decision variable: with P alone every row is a scalar multiple of
+    % every other and the whole set collapses to one import cap.
+    a = zeros(n,1); b = zeros(n,1);
     for j = 2:n
-        a(j) = -sum(R(intersect(pathOf{j}, pathOf{h}))) / den;
+        shared = intersect(pathOf{j}, pathOf{h});
+        a(j) = -sum(R(shared)) / den;
+        b(j) = -sum(X(shared)) / den;
     end
 
     ldf.C       = C;
     ldf.a       = a;
+    ldf.b       = b;
     ldf.hostBus = h;
-    ldf.V_of    = @(I) C + a*I;
+    ldf.V_of    = @(I) C + a*I;                 % Q = 0 (unity power factor)
+    ldf.V_ofPQ  = @(I,Q) C + a*I - b*Q;         % Q > 0 = injecting (reduces net Q load)
     ldf.Vlin_base = C + a*sys.busP_base(h);
+    % Ratio spread: the diagnostic for whether the per-bus rows are
+    % linearly independent. Constant ratio => colinear => collapses to a
+    % single scalar cap on import.
+    ldf.bOverA        = b(2:end) ./ a(2:end);
+    ldf.bOverA_range  = [min(ldf.bOverA) max(ldf.bOverA)];
+    ldf.rowsColinear  = (ldf.bOverA_range(2) - ldf.bOverA_range(1)) < 1e-9;
 
     % Accuracy against the exact solver, on the base case.
     Vex = abs(distflow_bfs(sys.branches, sys.busP_base, sys.busQ_base, sys.Vbase_kV)) / sys.Vbase_kV;

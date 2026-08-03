@@ -59,16 +59,30 @@ function sol = dayahead_dispatch(p, fc)
     slopeT = diff(bkT.y) ./ w;       % 1 x s thermal slope per segment
 
     % Variables per hour: 16 fixed + PH2total(1) + PH2seg(1..s) + u(1..s-1)
-    NV = 16 + 1 + s + (s-1);
+    % Reactive power is an optional extra decision variable per hour. When
+    % p.Inverter is present the hub's grid-facing inverter can inject
+    % (Qh>0) or absorb (Qh<0) reactive power within its apparent-power
+    % circle, which is the only mechanism by which the hub can support
+    % voltage. Absent p.Inverter the model is exactly as before.
+    % Qh is free-signed; Qabs is an auxiliary >= |Qh| carrying the small
+    % unity-power-factor tie-breaker cost (see multiscale_default_params.m).
+    useQ = isfield(p, 'Inverter');
+    nQ = useQ * 2;
+
+    NV = 16 + 1 + s + (s-1) + nQ;
     OFF = struct('Pgi',1,'Pge',2,'Ps',3, ...
                   'Bch',4,'Bdis',5,'Ech',6,'Edis',7, ...
                   'Lch',8,'Ldis',9,'Pch',10,'Pdis',11, ...
                   'SB',12,'SE',13,'SL',14,'SP',15,'Php',16,'PH2tot',17);
     segBase = 17; uBase = 17 + s;
+    qOff  = 17 + s + (s-1) + 1;         % Qh   within the hour block
+    qaOff = qOff + 1;                    % Qabs within the hour block
     nVar = NV*nT;
     vix    = @(t,off) (t-1)*NV + off;
     vixSeg = @(t,k)    vix(t, segBase+k);
     vixU   = @(t,k)     vix(t, uBase+k);
+    vixQ   = @(t)       vix(t, qOff);
+    vixQa  = @(t)       vix(t, qaOff);
 
     evAvail = ismember(fc.hours, p.EV.pluggedInHours);
 
@@ -99,6 +113,12 @@ function sol = dayahead_dispatch(p, fc)
         for k = 1:(s-1)
             ub(vixU(t,k)) = 1;
         end
+        if useQ
+            % IEEE 1547-2018 Cl. 5.2 Category B: +/- 44% of nameplate S.
+            lb(vixQ(t)) = -p.Inverter.Q_max;
+            ub(vixQ(t)) =  p.Inverter.Q_max;
+            ub(vixQa(t)) = p.Inverter.Q_max;   % Qabs >= |Qh|, lb 0 by default
+        end
     end
 
     %% Objective (fuel cost proportional to TOTAL hydrogen, meaning unchanged)
@@ -107,6 +127,9 @@ function sol = dayahead_dispatch(p, fc)
         c(vix(t,OFF.Pgi))    =  fc.DA.priceImport(t) * dt;
         c(vix(t,OFF.Pge))    = -fc.DA.priceExport(t) * dt;
         c(vix(t,OFF.PH2tot)) =  p.price_H2 * dt;
+        if useQ
+            c(vixQa(t)) = p.Inverter.Qcost * dt;   % unity-pf tie-breaker
+        end
     end
 
     %% Equality constraints: elec balance, heat balance, concentrator, 4x SOC recursion
@@ -173,12 +196,30 @@ function sol = dayahead_dispatch(p, fc)
         netC      = p.network.C(:);             % intercepts (pu)
         netA      = p.network.a(:);             % sensitivities (pu/kW)
         netFloor  = p.network.Vfloor(:);        % per-bus floor (pu)
+        if isfield(p.network, 'b'); netB = p.network.b(:); else; netB = []; end
         nNetRows  = nT * numel(netBuses);
     else
-        netBuses = []; nNetRows = 0;
+        netBuses = []; netB = []; nNetRows = 0;
     end
 
-    nIneq = nT*(4 + 2*(s-1)) + nNetRows;
+    % Apparent-power limit P^2 + Q^2 <= S^2, linearized as a regular
+    % polygon INSCRIBED in that circle so the model stays a MILP:
+    %     P*cos(th_k) + Q*sin(th_k) <= S*cos(pi/N),  th_k = 2*pi*k/N
+    % Inscribed (not circumscribed) means every feasible point is genuinely
+    % inside the inverter's real limit -- the model slightly under-uses the
+    % hardware rather than over-promising. P here is the net grid exchange
+    % Pgi - Pge, so both import and export directions are covered by
+    % sweeping th_k around the full circle.
+    if useQ
+        Npoly = p.Inverter.nPolygonSides;
+        polyTh  = 2*pi*(0:Npoly-1)/Npoly;
+        polyRhs = p.Inverter.S_max * cos(pi/Npoly);
+        nPolyRows = nT * (Npoly + 2);   % polygon + two |Qh| rows
+    else
+        Npoly = 0; nPolyRows = 0;
+    end
+
+    nIneq = nT*(4 + 2*(s-1)) + nNetRows + nPolyRows;
     Aub = zeros(nIneq, nVar); bub = zeros(nIneq,1);
     row = 0;
     for t = 1:nT
@@ -215,11 +256,39 @@ function sol = dayahead_dispatch(p, fc)
         end
 
         % LinDistFlow voltage floor at each monitored bus (opt-in).
+        % With reactive power the row becomes V_j = C_j + a_j*P + b_j*Q,
+        % and because b_j/a_j = (sum X)/(sum R) over each bus's shared path
+        % varies from bus to bus, these rows are NO LONGER colinear -- the
+        % constraint set does genuine multi-bus work instead of collapsing
+        % to a single scalar import cap.
         for bi = 1:numel(netBuses)
             row = row+1;
             Aub(row, vix(t,OFF.Pgi)) = -netA(bi);
             Aub(row, vix(t,OFF.Pge)) =  netA(bi);
+            % V_j = C_j + a_j*P - b_j*Qh. C_j already carries the host bus's
+            % NOMINAL reactive load, and a Q injection subtracts from that
+            % load, hence the minus sign on b_j in the voltage expression.
+            % Rearranged to <= form the Qh coefficient is therefore +b_j:
+            %     -a_j*P + b_j*Qh <= C_j - Vfloor
+            if useQ && ~isempty(netB)
+                Aub(row, vixQ(t)) = netB(bi);
+            end
             bub(row) = netC(bi) - netFloor(bi);
+        end
+
+        % Inverter apparent-power polygon.
+        for k = 1:Npoly
+            row = row+1;
+            Aub(row, vix(t,OFF.Pgi)) =  cos(polyTh(k));
+            Aub(row, vix(t,OFF.Pge)) = -cos(polyTh(k));
+            Aub(row, vixQ(t))        =  sin(polyTh(k));
+            bub(row) = polyRhs;
+        end
+        if useQ
+            % Qabs >= |Qh|, so the tie-breaker prices reactive magnitude
+            % regardless of direction.
+            row = row+1;  Aub(row, vixQ(t)) =  1; Aub(row, vixQa(t)) = -1; bub(row) = 0;
+            row = row+1;  Aub(row, vixQ(t)) = -1; Aub(row, vixQa(t)) = -1; bub(row) = 0;
         end
     end
 
@@ -255,6 +324,11 @@ function sol = dayahead_dispatch(p, fc)
     sol.SOCbld  = x(arrayfun(@(t) vix(t,OFF.SL), 1:nT))';
     sol.SOCpipe = x(arrayfun(@(t) vix(t,OFF.SP), 1:nT))';
     sol.Php     = x(arrayfun(@(t) vix(t,OFF.Php), 1:nT))';
+    if useQ
+        sol.Qh = x(arrayfun(@(t) vixQ(t), 1:nT))';   % kvar, + = injecting
+    else
+        sol.Qh = zeros(1, nT);
+    end
 
     sol.PH2seg = zeros(nT, s);
     for t = 1:nT

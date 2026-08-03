@@ -101,6 +101,77 @@ function p = multiscale_default_params()
                               % handedly cover every hour -- thermal storage
                               % and the fuel cell keep a genuine role)
 
+    % ---------------------------------------------------------------
+    % GRID-FACING INVERTER: apparent-power rating and reactive capability.
+    %
+    % Until now the hub was modelled at unity power factor -- it had no Q
+    % variable at all. That is not a conservative assumption, it is an
+    % unrealistic one: real PV, battery and fuel-cell inverters exchange
+    % reactive power, and modelling them without it removes the only
+    % mechanism by which the hub could support voltage.
+    %
+    % SIZING BASIS. The grid-facing inverter must carry the hub's peak net
+    % active exchange. Taken as the NON-COINCIDENT connected load, the same
+    % basis feeder_capacity.m uses for the connection itself:
+    %     45 kW peak electrical demand (forecast_profiles.m)
+    %   + 40 kW EV charger      (p.EV.Pch_max)
+    %   + 30 kW battery charger (p.Batt.Pch_max)
+    %   +  8 kW heat pump       (p.HeatPump.Pmax)
+    %   = 123 kW
+    % Actual peak import is lower (~104 kW), so in practice the inverter
+    % usually has MORE reactive headroom than the sizing case implies --
+    % stated so the capability is not silently overstated.
+    %
+    % OVERSIZING FACTOR, and why it is 1.15 rather than a round guess:
+    % delivering the IEEE 1547 Category B reactive capability (0.44 S) at
+    % the same time as rated active power requires
+    %     S >= P / sqrt(1 - 0.44^2) = 1.114 * P.
+    % 1.15 is the smallest sensible margin above that algebraic minimum,
+    % so the rating is set by the standard's own requirement rather than
+    % chosen to produce a result.
+    p.Inverter.P_design_kW   = 123.0;
+    p.Inverter.oversize      = 1.15;
+    p.Inverter.S_max         = p.Inverter.oversize * p.Inverter.P_design_kW;  % kVA
+    %
+    % REACTIVE LIMIT -- IEEE Std 1547-2018, Clause 5.2 (reactive power
+    % capability), Category B: the DER shall be capable of INJECTING and
+    % ABSORBING at least 44% of its nameplate apparent power rating. The
+    % 44% figure corresponds to 0.90 power factor at rated active power.
+    % (Category A requires 44% injection but only 25% absorption; Category
+    % B is the symmetric one and is what applies to DER expected to provide
+    % voltage support.) Verified against the standard's published clause
+    % summaries rather than assumed.
+    p.Inverter.QmaxFrac = 0.44;
+    p.Inverter.Q_max    = p.Inverter.QmaxFrac * p.Inverter.S_max;   % kvar, both directions
+    %
+    % Apparent-power limit P^2 + Q^2 <= S^2 is a CIRCLE and cannot enter a
+    % MILP. It is linearized as a regular polygon inscribed in that circle
+    % (see dayahead_dispatch.m). An inscribed polygon lies strictly inside
+    % the true limit, so the model slightly UNDER-uses the inverter -- the
+    % safe direction. With 12 sides the worst-case shortfall is
+    % 1 - cos(pi/12) = 3.4% of rated apparent power.
+    p.Inverter.nPolygonSides = 12;
+    %
+    % Q CARRIES A DELIBERATELY TINY PRICE, AND HERE IS WHY IT IS NOT A
+    % TUNING KNOB. Reactive power has no energy cost, so with no voltage
+    % constraint active the optimizer is INDIFFERENT to Q -- every value is
+    % equally optimal and glpk returns an arbitrary vertex (observed: Q
+    % pinned at -62.24 kvar, full absorption, in all 24 hours, which would
+    % have silently DEGRADED voltage in every verify-only result). A model
+    % whose network output depends on solver tie-breaking is not
+    % reporting physics.
+    %
+    % The tie is broken toward Q = 0, which is both physically and
+    % normatively right: reactive current causes real (if small) inverter
+    % conduction loss, and IEEE 1547-2018's DEFAULT operating mode is
+    % constant power factor at unity -- a compliant inverter supplies Q
+    % when there is a reason to, not by default. The coefficient below is
+    % sized to be a tie-breaker ONLY; its total effect on daily cost is
+    % printed by main_month3 so the reader can confirm it is not doing
+    % real work. When a voltage constraint IS active, the network benefit
+    % dominates this term by orders of magnitude and Q moves freely.
+    p.Inverter.Qcost = 1e-4;   % $/kvarh, tie-breaker toward unity power factor
+
     % Battery Energy Storage
     p.Batt.eta_ch    = 0.95;
     p.Batt.eta_dis   = 0.95;
