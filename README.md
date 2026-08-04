@@ -98,6 +98,206 @@ through the two trunk branches their paths share. `ieee33_system_definition(18, 
 restores the old siting and size exactly, and Month 2b still evaluates
 buses 18, 25 and 33 side by side.
 
+**Three seasons, not one generic day.** Every result used to come from a
+single 24-hour profile, which for a *multi-carrier* hub is the largest
+realism gap there is: heat demand peaks when PV output is at its minimum,
+so one averaged day cancels the two carriers against each other.
+`forecast_profiles(seed, unc, hubScale, season)` now takes
+`'winter' | 'shoulder' | 'summer'`, and **`'shoulder'` reproduces the
+previous profiles bit-for-bit** (verified: max |Δ| = 0 on all three curves),
+so it is the default and no existing result moved.
+
+`season_profile_factors.m` derives every factor and labels each one
+`[SOURCED]`, `[GEOMETRY]` or `[ASSUMED]`, because they do not carry equal
+weight:
+
+| Quantity | Basis | winter / shoulder / summer |
+|---|---|---|
+| Seasons, representative days | **[SOURCED]** BDEW/VDEW standard-load-profile seasons (winter 1 Nov–20 Mar, transition 21 Mar–14 May & 15 Sep–31 Oct, summer 15 May–14 Sep) | 15 Jan / 15 Apr / 15 Jul |
+| Electrical demand | **[SOURCED]** the official BDEW **H0 dynamisation polynomial** `f(t) = −3.92e−10·t⁴ + 3.20e−7·t³ − 7.02e−5·t² + 2.10e−3·t + 1.24`, normalised to the shoulder day | 1.2451 / 1.0000 / 0.7785 |
+| Day length | **[GEOMETRY]** Magdeburg 52.13°N, Cooper's declination, `L = (2/15)·acos(−tan φ·tan δ)` | 7.99 / 13.64 / 16.06 h |
+| PV peak | **[ASSUMED]** monthly yields (Jan 22, Apr 112, Jul 128 kWh/kWp) + the geometry above, peak derived from `E = P·(2/π)·L` | 0.3091 / 1.0000 / 0.8952 |
+| Space heating | **[SOURCED]** degree-day method, VDI 3807/2067 (room 20 °C, heating limit 15 °C); **[ASSUMED]** monthly means 0.5 / 9.0 / 18.5 °C | 1.7727 / 1.0000 / 0.0000 |
+
+PVGIS was unreachable from the build environment, so the monthly yields are
+**declared as assumptions rather than dressed up as sourced**. They are
+consistent with the one reachable published figure — German PV output
+differs between peak-month June and weakest-month December by "a factor of
+up to 10"; the assumed set gives 8.2. Note the counter-intuitive
+consequence, which is correct and not a slip: **the summer PV *peak* is 10%
+below April's while summer daily *energy* is 11% above it** — at 52°N the
+extra summer yield is day length, not midday power. No summer cooling is
+modelled (low German residential AC penetration, and the H0 curve — measured
+German behaviour — already puts summer below the annual mean). EV
+plugged-in hours and the tariff are deliberately **not** varied, with
+reasons given in the file.
+
+**Three claims turned out to be shoulder-season-specific.** All three had
+been stated as general:
+
+1. *"At today's delivered hydrogen price the fuel cell never starts."*
+   False in winter — 43.5 kWh of fuel on the shoulder day, **1552.6 kWh in
+   winter at the same price**. The mechanism is arithmetic, not economics:
+   winter heat demand is 3261 kWh/day and the heat pump can deliver at most
+   37.3 kW × COP 3.2 × 24 h = 2867 kWh, so ~394 kWh cannot come from it and
+   the fuel cell's byproduct heat is the only other source. It is
+   **must-run**. `multiscale_default_params.m` states the heat pump exists
+   precisely to prevent that; the reasoning holds at the shoulder and fails
+   in winter.
+2. *"Case 4 saves 72.1%."* That is a shoulder figure: **21.0% / 72.1% /
+   90.4%** across winter / shoulder / summer. No annual number is claimed —
+   three days are not a year, and the three days are not equally common.
+3. **The ablations change sign in winter.** Case 2 is −2.68% and Case 3 is
+   −0.84%: the full proposed system is the *most expensive* of the three hub
+   cases. Unmet energy is 0.00 kWh in every winter case, so the obvious
+   "it didn't serve the load" explanation is false. The measured mechanism
+   is **fuel substitution**: the closed loop burns 167 kWh more hydrogen
+   (+$36.78) and saves $14.21 of grid cost. The rolling layers commit more
+   fuel cell than the day-ahead plan in both seasons because each 15-minute
+   solve sees one slot ahead; whether that pays depends on **heat-pump
+   saturation** (24 of 24 hours in winter versus 9 of 24 at the shoulder).
+   The closed loop is still cleaner (−25.8 kgCO₂/day), so this is a
+   cost-versus-carbon trade a single-objective ablation scores as a loss.
+
+**Does building thermal mass contribute in winter?** Yes — and it does not
+take over, and both halves are reported. It goes from 1.24 to **55.73
+kWh/day** (45×) and from 0.37% to 13.0% of the pipe network's throughput.
+But the pipe still cycles **7.7× more** in the season most favourable to the
+building and leads in all three seasons, so *"each mechanism dominates in a
+different season"* is **not** supported and is not claimed. The statement
+is: the displacement finding holds in every season; what changes is only
+whether the displaced device is negligible or merely secondary. With the
+pipe disabled the building cycles 164.96 kWh/day over its full SOC band —
+displacement, not incapacity.
+
+## Confidence intervals on the headline claims
+
+`main_month4e_monte_carlo.m`. Three numbers carried the modelling argument
+and every one was a single-draw point estimate.
+
+**Protocol:** 60 draws = **20 seeds × 3 seasons**, varying both forecast
+noise and season. Every comparison runs **both configurations on the same
+draw** and differences them per draw — the scenario is then common to both
+members of the pair and cancels exactly, which is the only test with any
+power here (an unpaired comparison would be swamped by the ~16× spread
+between winter and summer costs). Differences are expressed as a percentage
+of their own baseline, because absolute dollars are not comparable across
+seasons. `paired_stats.m` reports **three tests** — a 95% t interval, a 95%
+bootstrap percentile interval, and an exact sign test — with no toolbox
+dependency (t critical values tabulated, bootstrap from `rand`, sign test
+summed in log space via `gammaln`).
+
+| Claim | quoted | mean | median | 95% CI | sign+ | verdict |
+|---|---|---|---|---|---|---|
+| PWL vs constant efficiency | 0.26% | **+1.42%** | +0.99% | [+1.00, +1.84] | 44/60 | **distinguishable** (p = 4e−4) |
+| Rolling layers on/off | 2.85% | **+3.06%** | +1.39% | [+1.20, +4.93] | 33/60 | **mean nonzero but outlier-driven** (sign test p = 0.52) |
+| Robust reserve on/off | 2.62% | **+1.63%** | +2.08% | [+1.17, +2.10] | 39/60 | **distinguishable** (p = 0.027) |
+
+**The rolling-layers result is the one to read carefully.** Its interval on
+the *mean* excludes zero, but the claimed direction held in only 33 of 60
+draws and the sign test does not reject — the mean is carried by a minority
+of large positive draws while the typical draw shows little. Quoting the
+mean alone would turn *"usually nothing, occasionally large"* into
+*"reliably positive"*. `paired_stats` has a verdict category for exactly
+this, and the script prints it rather than averaging the tests together.
+
+**All three claims change sign by season, and two of the flips are
+themselves resolved:**
+
+| Claim | winter | shoulder | summer |
+|---|---|---|---|
+| PWL vs constant | +3.52% | +0.93% | **−0.20% (reliable cost)** |
+| Rolling layers | **−3.77% (reliable cost)** | +1.38% | +11.58% |
+| Robust reserve | **−0.60% (reliable cost)** | +2.50% | +3.01% |
+
+A 0/20 sign count is strong evidence *against* a claim, not weak evidence
+for it; `paired_stats` labels that case `CONSISTENTLY OPPOSITE` rather than
+letting it fall into the outlier-driven bucket.
+
+These intervals cover **scenario** uncertainty only — efficiency curves,
+prices, emission factors, network data and hub size are fixed in every draw.
+The three seasons are weighted equally, which is not how a year is
+distributed, so the pooled mean is not an annual mean.
+
+## What the optimization is worth, as opposed to the equipment
+
+`main_month4h_rule_based_baseline.m`. The 72.1% headline compares against a
+system that owns no PV, battery, EV or heat pump, so most of it is the value
+of hardware. The demanding comparator is **the same hub under simple
+heuristic control** (`rule_based_dispatch.m`): charge storage below the
+median import price, discharge above it, run the fuel cell only when its
+marginal cost beats the grid or the heat balance forces it, no look-ahead.
+Same ratings, same SOC bands, same storage state equation, same true
+fuel-cell curves, same realized profiles.
+
+Over **30 paired draws** the heuristic costs **+31.5% more on a
+cost-weighted basis** and the optimizer won **30 of 30** draws — per season
+**+21.5% / +34.5% / +189.7%**. This is the strongest modelling claim the
+project can make, because identical hardware on identical scenarios differs
+only in scheduling.
+
+Two caveats travel with it. The summer figure is inflated by one specific
+weakness of the chosen rule: midday hours sit *exactly at* the median
+tariff, so the rule never charges from surplus PV — measured, the heuristic
+exports 1329 kWh/day in summer against the optimizer's 313 and re-imports it
+overnight. A one-line improvement would close much of that, so the winter
+and shoulder figures are the conservative ones. And the heuristic is not
+charged for peak demand, network impact, or the reserve it fails to hold.
+(An earlier version of the rule let thermal-storage charging start the fuel
+cell, which inflated the optimizer's margin from 31.5% to well over 100%;
+that was a defect in the baseline, not a result, and it was fixed.)
+
+## Siting: bus 18 versus bus 25
+
+`main_month4f_siting_comparison.m` runs the same single hub at each bus, one
+at a time. **Siting determines whether a hub can support voltage**, and the
+two halves of that pull against each other almost exactly:
+
+| | bus 18 | bus 25 |
+|---|---|---|
+| Host-bus load | 90 kW | 420 kW |
+| Penetration (feeder / host) | 2.79% / 115.3% | 13.03% / 115.3% |
+| dV/dQ at host | −5.70e−05 pu/kvar | −1.26e−05 pu/kvar |
+| Inverter reactive limit | 62.2 kvar | 290.4 kvar |
+| **Reactive support achieved** | **0.0018 pu** | **0.0003 pu** |
+| Loss reduction vs no hub | 251 kWh/day | 353 kWh/day |
+| Closed-loop compliance | 9/9 | 0/9 (worst shortfall 2.89e−06 pu) |
+
+Bus 18 is **4.5× more responsive per kvar**; bus 25 hosts **4.7× more
+inverter**, because the do-no-harm floor caps hub import at the nominal load
+of the bus it replaces. The product — full-output reactive authority
+`Q_max × |dV/dQ|` — is **0.00355 pu at bus 18 and 0.00365 pu at bus 25, a
+ratio of 0.97**. On a radial feeder the two properties are inversely related
+*by construction*: weak buses are weak precisely because they sit at the end
+of long thin laterals serving small loads. Neither siting is simply better —
+bus 18 is the stress test, bus 25 is the only one where a feeder-wide
+question can be asked at all.
+
+The compliance flip is reported with its magnitude and is **not** bus 25
+failing: the worst shortfall is 2.89e−06 pu against a LinDistFlow model
+whose own base-case error is 2208× larger. At bus 18 the hub sits *on* the
+binding bus so the linearization bias cancels; at bus 25 the binding bus is
+still 18, on a different lateral.
+
+## Voltage in space and time
+
+`main_month4g_voltage_heatmap.m` plots the full 33-bus × 288-step field
+(absolute, with the 0.95 pu contour) and the difference against the no-hub
+base case (diverging scale, zero contour), and renders both as text for
+headless runs. `network_verify` now returns `Vfield` and `Vbase_field`.
+
+The hub improves **93.7%** of the field and degrades 3.3% — but the worst
+degradation anywhere is **1.25e−06 pu**, four orders of magnitude below the
+0.0869 pu the feeder already sits below nominal, so "degrades 3% of the
+field" is true and nearly meaningless. The spatial pattern is **not**
+distance from the hub: mean lift is +0.00444 pu on the hub's own lateral,
++0.00143 pu at buses sharing branches 1-2 and 2-3, +0.00021 pu at buses
+19–22 which share only branch 1-2, and 0 at the slack. **Bus 18, the
+furthest bus from the hub, gains 6.9× more than bus 19, which is far nearer
+in hop count** — what sets the lift is shared series impedance, exactly as
+the LinDistFlow sensitivity `a_j` predicts, here reproduced by the exact
+nonlinear solver rather than asserted by the linear one.
+
 **The answer the re-sizing produced: both flat findings survived.** Across
 a 4× reserve sweep and a 6× uncertainty sweep the feeder minimum spans
 0.0002 pu and the *host bus itself* spans 0.0007 pu; across a 36× change in
@@ -141,6 +341,10 @@ main_month4a_case_studies
 main_month4b_sensitivity_analysis
 main_month4c_pwl_segment_sweep
 main_month4d_lindistflow_cooptimization
+main_month4e_monte_carlo            % confidence intervals, ~10 min
+main_month4f_siting_comparison      % bus 18 vs bus 25
+main_month4g_voltage_heatmap        % 33 buses x 288 steps
+main_month4h_rule_based_baseline    % optimization vs heuristic control
 ```
 
 Each script is self-contained (`clear; clc;` + whatever `addpath` it

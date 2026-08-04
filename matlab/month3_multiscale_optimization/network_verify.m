@@ -60,6 +60,12 @@ function nv = network_verify(sys, netInjection_kW, opts, netQ_kvar)
 %     hostV_min, hostV_max, hostV_mean
 %     Vmin_series               : per-step minimum voltage (pu)
 %     steps                     : indices actually evaluated
+%     Vfield                    : nBus x nSteps bus voltages in pu WITH the
+%                                 hub -- the full spatial/temporal field the
+%                                 scalar minima above are reductions of
+%     Vbase_field               : nBus x 1 bus voltages in pu with NO hub,
+%                                 the reference the field should be read
+%                                 against (main_month4g plots the difference)
 %     converged_all             : true if every power flow converged
 
     if nargin < 3; opts = struct(); end
@@ -89,6 +95,10 @@ function nv = network_verify(sys, netInjection_kW, opts, netQ_kvar)
     hostV       = zeros(nS,1);
     Vmax_series = zeros(nS,1);
     convOK      = true;
+    % Full bus x step voltage field. The per-step solve already produces it,
+    % so retaining it costs one array and no extra power flows; scalar
+    % minima hide WHERE and WHEN a hub acts, and main_month4g plots this.
+    Vfield      = zeros(sys.nBus, nS);
 
     for k = 1:nS
         busP = sys.busP_base;
@@ -106,6 +116,7 @@ function nv = network_verify(sys, netInjection_kW, opts, netQ_kvar)
         Vmax_series(k) = max(Vpu);
         losses_kW(k)   = Ploss;
         hostV(k)       = Vpu(sys.hostBus);
+        Vfield(:,k)    = Vpu(:);
         convOK = convOK && conv;
     end
 
@@ -157,6 +168,8 @@ function nv = network_verify(sys, netInjection_kW, opts, netQ_kvar)
     nv.dLossEnergy_pct     = 100 * nv.dLossEnergy_kWh / nv.base_lossEnergy_kWh;
 
     nv.Vmin_series   = Vmin_series;
+    nv.Vfield        = Vfield;      % nBus x nSteps, pu -- with the hub
+    nv.Vbase_field   = VbPu(:);     % nBus x 1, pu -- no hub anywhere
     nv.steps         = steps;
     nv.vLimit        = opts.vLimit;
     nv.stride        = opts.stride;
