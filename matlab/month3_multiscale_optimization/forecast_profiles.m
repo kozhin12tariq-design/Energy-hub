@@ -1,7 +1,7 @@
-function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
+function fc = forecast_profiles(seed, uncertaintyScale, hubScale, season)
 %FORECAST_PROFILES Day-ahead / intraday / real-time forecast hierarchy.
 %
-%   fc = FORECAST_PROFILES(seed, uncertaintyScale, hubScale)
+%   fc = FORECAST_PROFILES(seed, uncertaintyScale, hubScale, season)
 %
 %   Generates one self-consistent 24-hour scenario at three resolutions
 %   with decreasing uncertainty, matching the three dispatch levels:
@@ -36,6 +36,20 @@ function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
 %                      profile), so a bigger hub sees proportionally
 %                      bigger absolute forecast errors automatically, with
 %                      the same relative uncertainty.
+%   season           : 'winter' | 'shoulder' (default) | 'summer'. Scales
+%                      and reshapes the three profiles for the season; see
+%                      season_profile_factors.m, which documents where every
+%                      factor comes from and labels each as sourced,
+%                      geometric or assumed. 'shoulder' reproduces the
+%                      pre-seasonal profiles EXACTLY, so every result
+%                      published before seasons existed remains reachable
+%                      unchanged under that label.
+%
+%   WHY SEASONS MATTER HERE MORE THAN IN A SINGLE-CARRIER STUDY: heat demand
+%   peaks when PV output is at its minimum, so a single averaged day cancels
+%   the two carriers against each other and hides the coupling the thesis is
+%   about. The seasonal cases are not decoration; they are the only way to
+%   see whether a conclusion drawn on one day generalises.
 %
 %   MODEL BOUNDARY -- WHAT `solar` IS: the `solar` series is the PV
 %   array's AVAILABLE DC ELECTRICAL OUTPUT in kW (a 50*hubScale kW-peak
@@ -61,6 +75,8 @@ function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
         hs = hub_sizing();
         hubScale = hs.scale;
     end
+    if nargin < 4 || isempty(season); season = 'shoulder'; end
+    sf = season_profile_factors(season);
     rand('seed', seed); %#ok<RAND> -- Octave-compatible seeding
     randn('seed', seed); %#ok<RAND>
 
@@ -79,11 +95,27 @@ function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
     % forgetting the max(...,5) floor would silently flatten the heat
     % profile at large hubScale -- doing it in one place makes that
     % impossible.)
-    solar_DA = max(0, 50*sin(pi*(hours-6)/13));
-    solar_DA(hours < 6 | hours > 19) = 0;
-    Lelec_DA = 20 + 15*exp(-((hours-8).^2)/8) + 25*exp(-((hours-19).^2)/8);
-    Lheat_DA = 15 + 12*exp(-((hours-7).^2)/6) + 14*exp(-((hours-21).^2)/10) - 5*exp(-((hours-13).^2)/20);
-    Lheat_DA = max(Lheat_DA, 5);
+    % PV: half-sine across the season's own daylight window. At 'shoulder'
+    % sunrise/sunset/peak are 6/19/1.0 and this is character-for-character
+    % the original expression.
+    solar_DA = max(0, 50*sf.pvPeakFactor*sin(pi*(hours-sf.sunrise)/sf.dayLength_h));
+    solar_DA(hours < sf.sunrise | hours > sf.sunset) = 0;
+
+    % Electrical demand: BDEW H0 seasonal magnitude, morning peak fixed at
+    % 08:00 (work/school routine), evening peak following sunset (lighting
+    % and occupancy). At 'shoulder' the evening peak is hour 19 and the
+    % factor is 1.0, reproducing the original curve exactly.
+    Lelec_DA = sf.elecFactor * ( 20 ...
+             + 15*exp(-((hours-8).^2)/8) ...
+             + 25*exp(-((hours-sf.eveningPeakHour).^2)/8) );
+
+    % Heat: a constant domestic-hot-water baseline that does NOT scale, plus
+    % a space-heating component scaled by degree days. Summer therefore
+    % collapses to DHW alone. At 'shoulder' heatFactor = 1 and this returns
+    % the original curve unchanged.
+    heatShoulder = 15 + 12*exp(-((hours-7).^2)/6) + 14*exp(-((hours-21).^2)/10) - 5*exp(-((hours-13).^2)/20);
+    heatShoulder = max(heatShoulder, 5);
+    Lheat_DA = sf.dhw_kW + sf.heatFactor * (heatShoulder - sf.dhw_kW);
 
     solar_DA = hubScale * solar_DA;
     Lelec_DA = hubScale * Lelec_DA;
@@ -122,6 +154,8 @@ function fc = forecast_profiles(seed, uncertaintyScale, hubScale)
     Lheat_ID = max(0, Lheat_ID .* (1 + ar1_noise(96, 0.5, 0.03*uncertaintyScale)));
 
     fc.hubScale = hubScale;   % recorded so any consumer can tell what size it holds
+    fc.season   = sf.name;    % ditto for which season it holds
+    fc.seasonFactors = sf;
     fc.hours = hours; fc.slots15 = slots15; fc.slots5 = slots5;
     fc.DA.solar = solar_DA; fc.DA.Lelec = Lelec_DA; fc.DA.Lheat = Lheat_DA;
     fc.DA.priceImport = priceImport_DA; fc.DA.priceExport = priceExport_DA;
