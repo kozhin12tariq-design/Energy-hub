@@ -2125,19 +2125,13 @@ and have been re-measured rather than patched.
 
 ### The gate — 60 draws, paired, PWL vs a 1-segment chord of the same curve
 
-> **PENDING RE-MEASUREMENT.** Every cost figure in this subsection was
-> produced with the defective covering-COP convention described above and
-> is therefore not trustworthy. The gate is being re-run; these numbers
-> will be **replaced, not patched**. They are left visible rather than
-> deleted so the record shows what changed and why.
-
 
 The comparison is **PWL against a chord of the identical curve**, not against
 the legacy constant. That isolates the segmentation from the curve.
 
 | | mean % | median | sd | 95% CI (t) | 95% CI (boot) | sign+ | sign p |
 |---|---|---|---|---|---|---|---|
-| Benefit of HP PWL | **−0.162** | 0.218 | 1.290 | **[−0.490, +0.166]** | [−0.490, +0.160] | 40/60 | 0.013 |
+| Benefit of HP PWL | **−0.063** | 0.213 | 1.138 | **[−0.352, +0.226]** | [−0.353, +0.217] | 40/60 | 0.013 |
 
 **Verdict: direction consistent but the mean interval spans zero. GATE NOT PASSED.**
 
@@ -2146,8 +2140,8 @@ Per season, and this is where the pooled null comes from:
 | Season | mean % | median | 95% CI (t) | sign+ | verdict |
 |---|---|---|---|---|---|
 | winter | +0.244 | 0.218 | [+0.203, +0.285] | 20/20 | distinguishable from zero |
-| shoulder | +1.048 | 0.978 | [+0.849, +1.248] | 20/20 | distinguishable from zero |
-| summer | **−1.778** | −1.577 | [−2.113, −1.443] | **0/20** | **consistently opposite — a reliable cost** |
+| shoulder | +0.985 | 0.881 | [+0.782, +1.188] | 20/20 | distinguishable from zero |
+| summer | **−1.419** | −1.267 | [−1.792, −1.045] | **0/20** | **consistently opposite — a reliable cost** |
 
 The pooled null is not noise. It is **two resolved effects cancelling**, and
 reporting only the pooled figure would hide that.
@@ -2179,7 +2173,7 @@ breakpoints put the coarsest approximation exactly where this curve bends most,
 and a device that operates only in that region is worse off with them than
 without them."
 
-### The indicated fix was tested, and it works — but it is not the gate
+### The indicated fix was tested — and it does *not* work. A retraction.
 
 Same segment count, `'curvature'` placement (already implemented in Month 2a,
 no new fitting code):
@@ -2190,36 +2184,56 @@ slopes           = 0.976 2.863 4.795 6.067 4.447
 binaries still required: yes
 ```
 
-Four of five breakpoints fall below u = 0.34. The worst low-load over-promise
-falls from **+4.85 kW to +0.32 kW** and the mean error changes sign to the safe
-direction.
+Four of five breakpoints fall below u = 0.34, and on the **approximation** side
+it does exactly what it should: the summer error moves from **+1.461 kW
+(optimistic)** to **−0.695 kW (pessimistic)**.
+
+On **cost** it does not:
 
 | | mean % | 95% CI (t) | sign+ | sign p | verdict |
 |---|---|---|---|---|---|
-| Curvature-placed vs chord | **+0.700** | **[+0.394, +1.005]** | 50/60 | 1.6e−07 | resolved |
+| Curvature-placed vs chord | **−0.137** | **[−0.580, +0.307]** | 40/60 | 0.013 | **spans zero** |
 | — winter | +0.068 | [+0.065, +0.071] | | | resolved |
-| — shoulder | +1.863 | [+1.651, +2.074] | | | resolved |
-| — summer | +0.169 | [−0.516, +0.853] | | | not resolved |
+| — shoulder | +1.733 | [+1.532, +1.934] | | | resolved |
+| — summer | **−2.211** | [−2.682, −1.739] | 0/20 | | **reliable cost** |
 
-This is reported as **diagnosis, not as a passed gate**. The gate was specified
-on the uniform configuration and it failed; re-running it with a placement
-chosen *after* seeing which placement loses would be tuning the curve toward a
-favourable answer, which the session rules forbid. What the curvature result
-legitimately establishes is the *mechanism*: the loss was breakpoint placement,
-not segmentation per se. Even so, the benefit is +0.700% for 96 binaries and
-+15% solve time, and summer still does not resolve.
+**An earlier version of this study reported this configuration as +0.700%
+[+0.394, +1.005], resolved on all three tests, and called it the fix that turns
+the gate positive. That was measured with the defective covering-COP
+convention, whose error fell almost entirely on summer. Corrected, the claim
+does not hold and is withdrawn.** Curvature placement is now *worse* in summer
+(−2.211%) than uniform placement (−1.419%).
+
+**What survives is more interesting than what was withdrawn.** Curvature
+placement is genuinely the better *fit* — it cuts the low-load over-promise and
+flips the error to the safe side — and it is still the worse *cost*. Those two
+coming apart is the useful finding: **a fit closer to the true curve does not
+automatically buy a cheaper dispatch**, so any argument for PWL that reasons
+from approximation error alone is incomplete. This project's own Month 4a
+"Optimism" column made the same point about the Gap(%) column, and it reappears
+here on a second device.
+
+**One bound on that comparison, stated because it cuts toward this
+conclusion.** `true_curve_cost` credits surplus heat at the same COP at which it
+charges a shortfall, so a systematically **pessimistic** fit earns a systematic
+credit. The chord is the most pessimistic model here and it wins in summer, so
+part of that margin is the pricing convention rather than the physics. It is
+left **as measured rather than re-tuned** — adjusting a convention after seeing
+which arm it favours is precisely the move this session exists to avoid. The
+gate verdict does not rest on it either way: **the gate spans zero under both
+the defective and the corrected convention.**
 
 ### What the complexity costs
 
 | Quantity | Value |
 |---|---|
-| Mean closed-loop solve time, PWL | 2.870 s |
-| Mean closed-loop solve time, chord | 2.486 s |
-| **Added solve time** | **+15.4%** |
+| Mean closed-loop solve time, PWL | 2.790 s |
+| Mean closed-loop solve time, chord | 2.407 s |
+| **Added solve time** | **+15.9%** |
 | Added binaries, day-ahead (24 h) | 96 |
 | Added binaries, per intraday solve | 16 |
 | Mean HP electricity, PWL / chord | 432.7 / 455.4 kWh |
-| Mean true-curve correction, PWL / chord | +0.55 / −1.50 $ |
+| Mean true-curve correction, PWL / chord | +0.04 / −1.98 $ |
 
 ### Context that is *not* the gate
 
@@ -2243,12 +2257,20 @@ benefit is not statistically distinguishable from zero, stop and report that.
 Do not proceed to Tasks 2–3 on the assumption that more PWL is better"* —
 neither was implemented.
 
-This is worth stating plainly rather than as an omission. The heat pump has
-**15× the fuel cell's throughput** and a genuinely nonlinear COP, and it is the
-strongest candidate the hub contains. If PWL cannot buy a resolvable
-improvement there, the prior that "more PWL is better" is not supported, and
-building two more instances of it would have produced two more unmeasured
-model complications rather than evidence.
+This is worth stating plainly rather than as an omission. The heat pump moves
+**8.4× the fuel cell's energy** at today's price and has a genuinely nonlinear
+COP; it is the strongest candidate the hub contains. Neither uniform nor
+curvature-placed breakpoints buy a resolvable improvement there. The prior that
+"more PWL is better" is not supported, and building two more instances of it
+would have produced two more unmeasured model complications rather than
+evidence.
+
+Note the gate would have failed on the corrected numbers **more** cleanly than
+on the defective ones in one respect: the earlier convention made curvature
+placement look like a rescue (+0.700%, resolved), which is the result that would
+most plausibly have justified pressing on to Tasks 2 and 3. Corrected, that
+rescue disappears. The decision not to proceed is better supported after the fix
+than before it.
 
 
 ---
@@ -2276,8 +2298,8 @@ comparator over-promises heat, under-buys hydrogen, and looks cheaper than it
 is. An earlier version of this table omitted the correction and reported
 **every** PWL configuration as a reliable cost at today's hydrogen price. What
 it was measuring was an unpriced heat shortfall in its own comparator.
-`true_curve_cost.m` closes that, pricing the shortfall through the heat pump —
-the cheapest heat source here, and therefore the most conservative charge.
+`true_curve_cost.m` closes that, pricing the shortfall through the heat pump at
+a covering COP floored at its rated value (see the covering-COP defect above).
 
 ### Price case 1 — H2 today ($7.33/kg), fuel cell 52 kWh/day, must-run
 

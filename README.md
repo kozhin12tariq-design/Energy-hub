@@ -196,11 +196,6 @@ because the low-load cycling penalty makes the first slice the least
 efficient. The slopes are *not* monotonically decreasing, so **fill-order
 binaries are required**, exactly as for the fuel cell.
 
-> **PENDING RE-MEASUREMENT.** The cost figures in this section came from a
-> defective correction (the covering-COP defect documented in
-> `VALIDATION.md`) and are being re-measured. They will be replaced, not
-> patched.
-
 **The gate: not passed.** 60 paired draws, n-segment PWL against a
 **1-segment chord of the same curve** (comparing against the legacy COP 3.2
 would measure a *level* change, 3.2 → 4.81, and report it as a PWL benefit —
@@ -209,11 +204,11 @@ comparison is +17.21% and is reported separately).
 
 | | pooled | winter | shoulder | summer |
 |---|---|---|---|---|
-| Heat-pump PWL benefit | **−0.162%** [−0.490, +0.166] | +0.244% | +1.048% | **−1.778%** |
+| Heat-pump PWL benefit | **−0.063%** [−0.352, +0.226] | +0.244% | +0.985% | **−1.419%** |
 | verdict | spans zero | resolved | resolved | **reliable cost** |
 
 Cost of the complexity: **96 extra binaries** per day-ahead solve and
-**+15.4%** closed-loop solve time. Per the session's own gate, **Tasks 2 (PV
+**+15.9%** closed-loop solve time. Per the session's own gate, **Tasks 2 (PV
 inverter) and 3 (battery) were not run.**
 
 **The pooled null is two resolved effects cancelling**, and the mechanism is
@@ -234,17 +229,26 @@ punished asymmetrically (a shortfall is covered at the import tariff, a
 surplus is only worth the export price — the same mechanism the Optimism
 column established for the fuel cell).
 
-**So the failure is breakpoint placement, not PWL.** Measured on the same
-draws: **curvature-placed breakpoints** — same segment count, same binaries,
-same solve cost, using the placement option Month 2a already implemented —
-give **+0.700% [+0.394, +1.005]**, 50/60 draws, sign test p = 1.6e−7,
-resolved on all three tests, with the worst low-load over-promise falling
-from +4.85 kW to +0.32 kW.
+**Is the failure just breakpoint placement? No — and an earlier version of
+this study said yes.** Curvature-placed breakpoints (same segment count, same
+binaries, the placement option Month 2a already implemented) were reported as
+**+0.700% [+0.394, +1.005]**, resolved. That was measured with a defective
+cost correction whose error fell almost entirely on summer. **Corrected, it
+gives −0.137% [−0.580, +0.307] — spanning zero — and is withdrawn.** In summer
+it is *worse* than uniform placement (−2.211% vs −1.419%).
 
-**The default remains `usePWL = false`**, which is a deliberate call: the
-configuration that passes is not the one the gate specified and was measured
-on the draws that diagnosed the failure — a weaker claim than this project
-usually makes — and enabling it would also apply the +17.21% *level* change
+**What survives is the more interesting half.** Curvature placement is
+genuinely the better *fit*: the summer error moves from +1.461 kW (optimistic)
+to −0.695 kW (pessimistic). It is still the worse *cost*. **A fit closer to the
+true curve does not automatically buy a cheaper dispatch** — so any argument
+for PWL reasoning from approximation error alone is incomplete. (One bound: the
+correction credits surplus heat at the rate it charges shortfall, so a
+systematically pessimistic fit earns a systematic credit, and the chord is the
+most pessimistic model here. Left as measured rather than re-tuned; the gate
+spans zero under either convention.)
+
+**The default remains `usePWL = false`.** No tested configuration resolves
+positive, and enabling the curve would also apply the +17.21% *level* change
 to every cost figure in Months 3 and 4. Keeping the legacy constant means
 every pre-existing result reproduces exactly.
 

@@ -145,9 +145,10 @@ function p = multiscale_default_params(hubScale)
     % the fuel cell's PWL with a 1-segment fit of its own curve.
     % DEFAULT IS OFF, AND THE GATE IS WHY. main_month4i measures the
     % n-segment PWL against a 1-segment chord of the same curve over 60
-    % paired draws: pooled -0.162% with a 95% interval of [-0.490, +0.166],
+    % paired draws: pooled -0.063% with a 95% interval of [-0.352, +0.226],
     % i.e. indistinguishable from zero, against a cost of 96 extra binaries
-    % per day-ahead solve and +16% closed-loop solve time. By this
+    % per day-ahead solve and +16% closed-loop solve time. Curvature-placed
+    % breakpoints do not rescue it either (-0.137%, [-0.580, +0.307]). By this
     % project's own decision rule that is not worth shipping, so the
     % default keeps the legacy constant and every pre-existing result
     % reproduces exactly. The curve and its measurement remain available --
