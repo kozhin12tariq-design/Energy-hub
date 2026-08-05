@@ -2227,13 +2227,19 @@ the defective and the corrected convention.**
 
 | Quantity | Value |
 |---|---|
-| Mean closed-loop solve time, PWL | 2.790 s |
-| Mean closed-loop solve time, chord | 2.407 s |
-| **Added solve time** | **+15.9%** |
+| Mean closed-loop solve time, PWL | 2.790 / 2.808 s |
+| Mean closed-loop solve time, chord | 2.407 / 2.427 s |
+| **Added solve time** | **+15.9% / +15.7%** |
 | Added binaries, day-ahead (24 h) | 96 |
 | Added binaries, per intraday solve | 16 |
 | Mean HP electricity, PWL / chord | 432.7 / 455.4 kWh |
 | Mean true-curve correction, PWL / chord | +0.04 / −1.98 $ |
+
+Two figures per row are two independent solo runs. The cost statistics
+reproduce **exactly** across them (−0.063% pooled, −0.137% curvature-placed,
+every per-season figure identical); only wall-clock timing moves, by about
+0.2 percentage points. Quote the solve-time cost as **≈+16%**, not to a
+third decimal.
 
 ### Context that is *not* the gate
 

@@ -208,7 +208,7 @@ comparison is +17.21% and is reported separately).
 | verdict | spans zero | resolved | resolved | **reliable cost** |
 
 Cost of the complexity: **96 extra binaries** per day-ahead solve and
-**+15.9%** closed-loop solve time. Per the session's own gate, **Tasks 2 (PV
+**≈+16%** closed-loop solve time (+15.9% and +15.7% on two independent solo runs; the cost statistics reproduce exactly across them). Per the session's own gate, **Tasks 2 (PV
 inverter) and 3 (battery) were not run.**
 
 **The pooled null is two resolved effects cancelling**, and the mechanism is
