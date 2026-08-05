@@ -69,7 +69,26 @@ function sol = dayahead_dispatch(p, fc)
     useQ = isfield(p, 'Inverter');
     nQ = useQ * 2;
 
-    NV = 16 + 1 + s + (s-1) + nQ;
+    % HEAT-PUMP PWL, structurally identical to the fuel cell's above: the
+    % electrical input Php is split into segments, a concentrator ties them
+    % to the total, and the heat-balance row uses a per-segment COP instead
+    % of one constant. Opt-in via p.HeatPump.usePWL; with it off the model
+    % is bit-identical to the constant-COP version. Fill-order binaries are
+    % added ONLY if heatpump_curve.m's numerical slope check says the curve
+    % needs them -- see that file for the measured slopes.
+    useHP = isfield(p.HeatPump, 'usePWL') && p.HeatPump.usePWL;
+    if useHP
+        if isfield(fc, 'ambientC'); ambHP = fc.ambientC; else; ambHP = []; end
+        hp     = heatpump_curve(p, ambHP);
+        sHP    = hp.nSegments;
+        wHP    = hp.w;
+        copSeg = hp.slopes;
+        nHPu   = hp.needsBinaries * (sHP - 1);
+    else
+        sHP = 0; wHP = []; copSeg = []; nHPu = 0; hp = struct('needsBinaries', false);
+    end
+
+    NV = 16 + 1 + s + (s-1) + nQ + sHP + nHPu;
     OFF = struct('Pgi',1,'Pge',2,'Ps',3, ...
                   'Bch',4,'Bdis',5,'Ech',6,'Edis',7, ...
                   'Lch',8,'Ldis',9,'Pch',10,'Pdis',11, ...
@@ -77,12 +96,16 @@ function sol = dayahead_dispatch(p, fc)
     segBase = 17; uBase = 17 + s;
     qOff  = 17 + s + (s-1) + 1;         % Qh   within the hour block
     qaOff = qOff + 1;                    % Qabs within the hour block
+    hpSegBase = 17 + s + (s-1) + nQ;     % Php segments follow the Q block
+    hpUBase   = hpSegBase + sHP;         % their fill-order binaries follow those
     nVar = NV*nT;
     vix    = @(t,off) (t-1)*NV + off;
     vixSeg = @(t,k)    vix(t, segBase+k);
     vixU   = @(t,k)     vix(t, uBase+k);
     vixQ   = @(t)       vix(t, qOff);
     vixQa  = @(t)       vix(t, qaOff);
+    vixHP  = @(t,k)     vix(t, hpSegBase+k);
+    vixHPu = @(t,k)     vix(t, hpUBase+k);
 
     evAvail = ismember(fc.hours, p.EV.pluggedInHours);
 
@@ -106,6 +129,12 @@ function sol = dayahead_dispatch(p, fc)
         ub(vix(t,OFF.Pch))  = p.Pipe.Pch_max;
         ub(vix(t,OFF.Pdis)) = p.Pipe.Pdis_max;
         ub(vix(t,OFF.Php))  = p.HeatPump.Pmax;
+        for k = 1:sHP
+            ub(vixHP(t,k)) = wHP(k);
+        end
+        for k = 1:nHPu
+            ub(vixHPu(t,k)) = 1;
+        end
         ub(vix(t,OFF.PH2tot)) = p.PWL.FC_H2_max;
         lb(vix(t,OFF.SB)) = p.Batt.SOCmin;     ub(vix(t,OFF.SB)) = p.Batt.SOCmax;
         lb(vix(t,OFF.SL)) = p.Building.SOCmin; ub(vix(t,OFF.SL)) = p.Building.SOCmax;
@@ -140,7 +169,7 @@ function sol = dayahead_dispatch(p, fc)
     end
 
     %% Equality constraints: elec balance, heat balance, concentrator, 4x SOC recursion
-    nEq = nT*7;
+    nEq = nT*(7 + useHP);   % +1 row/hour for the heat-pump concentrator
     Aeq = zeros(nEq, nVar); beq = zeros(nEq,1);
     row = 0;
     for t = 1:nT
@@ -162,12 +191,28 @@ function sol = dayahead_dispatch(p, fc)
         for k = 1:s
             Aeq(row, vixSeg(t,k)) = slopeT(k);
         end
-        Aeq(row, vix(t,OFF.Php))  = p.HeatPump.COP;
+        if useHP
+            % sum_k COP_k * Php_seg(k) in place of COP * Php
+            for k = 1:sHP
+                Aeq(row, vixHP(t,k)) = copSeg(k);
+            end
+        else
+            Aeq(row, vix(t,OFF.Php))  = p.HeatPump.COP;
+        end
         Aeq(row, vix(t,OFF.Ldis)) = 1;
         Aeq(row, vix(t,OFF.Lch))  = -1;
         Aeq(row, vix(t,OFF.Pdis)) = 1;
         Aeq(row, vix(t,OFF.Pch))  = -1;
         beq(row) = fc.DA.Lheat(t);
+
+        if useHP
+            row = row+1; % heat-pump concentrator: sum_k Php_seg(k) = Php
+            for k = 1:sHP
+                Aeq(row, vixHP(t,k)) = 1;
+            end
+            Aeq(row, vix(t,OFF.Php)) = -1;
+            beq(row) = 0;
+        end
 
         row = row+1; % concentrator: sum_k PH2seg(k) = PH2tot
         for k = 1:s
@@ -234,7 +279,7 @@ function sol = dayahead_dispatch(p, fc)
         Npoly = 0; nPolyRows = 0;
     end
 
-    nIneq = nT*(4 + 2*(s-1)) + nNetRows + nPolyRows;
+    nIneq = nT*(4 + 2*(s-1) + 2*nHPu) + nNetRows + nPolyRows;
     Aub = zeros(nIneq, nVar); bub = zeros(nIneq,1);
     row = 0;
     for t = 1:nT
@@ -267,6 +312,20 @@ function sol = dayahead_dispatch(p, fc)
 
             row = row+1; % -PH2seg(k) + w(k)*u_k <= 0   (i.e. PH2seg(k) >= w(k)*u_k)
             Aub(row, vixSeg(t,k)) = -1; Aub(row, vixU(t,k)) = w(k);
+            bub(row) = 0;
+        end
+
+        % Heat-pump fill-order, added only when the measured slopes are
+        % non-monotonic (heatpump_curve.m checks; it is true for this curve
+        % because the low-load cycling penalty makes segment 1 the least
+        % efficient slice). Identical structure to the fuel cell's above.
+        for k = 1:nHPu
+            row = row+1;
+            Aub(row, vixHP(t,k+1)) = 1; Aub(row, vixHPu(t,k)) = -wHP(k+1);
+            bub(row) = 0;
+
+            row = row+1;
+            Aub(row, vixHP(t,k)) = -1;  Aub(row, vixHPu(t,k)) = wHP(k);
             bub(row) = 0;
         end
 
@@ -315,6 +374,9 @@ function sol = dayahead_dispatch(p, fc)
         for k = 1:(s-1)
             vartype(vixU(t,k)) = 'I';
         end
+        for k = 1:nHPu
+            vartype(vixHPu(t,k)) = 'I';
+        end
     end
 
     param.msglev = 0;
@@ -339,6 +401,23 @@ function sol = dayahead_dispatch(p, fc)
     sol.SOCbld  = x(arrayfun(@(t) vix(t,OFF.SL), 1:nT))';
     sol.SOCpipe = x(arrayfun(@(t) vix(t,OFF.SP), 1:nT))';
     sol.Php     = x(arrayfun(@(t) vix(t,OFF.Php), 1:nT))';
+    % Heat-pump PWL diagnostics, so callers can report the curve actually
+    % used and the delivered heat without re-deriving either.
+    sol.hpPWL = useHP;
+    if useHP
+        sol.HPseg = zeros(nT, sHP);
+        for t = 1:nT
+            for k = 1:sHP
+                sol.HPseg(t,k) = x(vixHP(t,k));
+            end
+        end
+        sol.hpHeat    = sol.HPseg * copSeg(:);          % kW thermal per hour
+        sol.hpCurve   = hp;
+    else
+        sol.HPseg   = [];
+        sol.hpHeat  = (p.HeatPump.COP * sol.Php)';
+        sol.hpCurve = [];
+    end
     if useQ
         sol.Qh = x(arrayfun(@(t) vixQ(t), 1:nT))';   % kvar, + = injecting
     else

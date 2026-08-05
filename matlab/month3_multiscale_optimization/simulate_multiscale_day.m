@@ -129,6 +129,11 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
 
     Pg_imp5 = zeros(288,1); Pg_exp5 = zeros(288,1); PH2_5 = zeros(288,1);
     SOCbatt5 = zeros(288,1); Q5 = zeros(288,1);
+    % Heat-pump electrical setpoint actually executed. Real time holds it
+    % fixed at the intraday commitment, so the 5-minute series is the
+    % 15-minute commitment repeated -- recorded because the PWL device sweep
+    % re-evaluates it against the true continuous COP curve.
+    Php5 = zeros(288,1);
     ID_SOC = struct('Batt',zeros(96,1),'EV',zeros(96,1),'Building',zeros(96,1),'Pipe',zeros(96,1));
     ID_Pg_imp = zeros(96,1); ID_Pg_exp = zeros(96,1); ID_PH2 = zeros(96,1);
     RT_imbalance = zeros(288,1);
@@ -142,6 +147,11 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
 
         fcNow.solar = fc.ID.solar(k); fcNow.Lelec = fc.ID.Lelec(k); fcNow.Lheat = fc.ID.Lheat(k);
         fcNow.priceImport = fc.DA.priceImport(hourOfK); fcNow.priceExport = fc.DA.priceExport(hourOfK);
+        % The heat pump's COP curve is ambient-dependent, so the intraday
+        % layer needs the same ambient the day-ahead layer used. Carried on
+        % the slot struct rather than re-derived, so the two layers cannot
+        % disagree about the weather.
+        if isfield(fc, 'ambientC'); fcNow.ambientC = fc.ambientC; end
 
         fcNextScen = struct('solar',{},'Lelec',{},'Lheat',{},'priceImport',{},'priceExport',{});
         for s = 1:3
@@ -150,6 +160,11 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
             fcNextScen(s).Lheat = fc.ID.Lheat(kNext);
             fcNextScen(s).priceImport = fc.DA.priceImport(hourOfNext);
             fcNextScen(s).priceExport = fc.DA.priceExport(hourOfNext);
+            % Same ambient on every block: the scenarios differ in PV and
+            % load, not in the weather the heat pump runs against. The field
+            % must exist on all blocks or the struct concatenation in
+            % intraday_dispatch fails.
+            if isfield(fc, 'ambientC'); fcNextScen(s).ambientC = fc.ambientC; end
         end
 
         socRefNow.Batt = socRef15.Batt(k); socRefNow.EV = socRef15.EV(k);
@@ -161,6 +176,7 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
         ID_SOC.Batt(k) = SOCafterID.Batt; ID_SOC.EV(k) = SOCafterID.EV;
         ID_SOC.Building(k) = SOCafterID.Building; ID_SOC.Pipe(k) = SOCafterID.Pipe;
         ID_Pg_imp(k) = committed.Pg_imp; ID_Pg_exp(k) = committed.Pg_exp; ID_PH2(k) = committed.PH2;
+        Php5((3*(k-1)+1):(3*k)) = committed.Php;
 
         SOCbatt5loop = SOCstate.Batt;
         for j = 1:3
@@ -181,6 +197,7 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
     end
 
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
+    res.Php5 = Php5;
     res.Q5 = Q5;                     % 5-min reactive dispatch actually executed
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;
@@ -191,6 +208,7 @@ end
 
 function res = simulate_open_loop(p, fc, DA, hourOf5)
     Pg_imp5 = zeros(288,1); Pg_exp5 = zeros(288,1); PH2_5 = zeros(288,1);
+    Php5 = zeros(288,1);
     SOCbatt5 = zeros(288,1); Q5 = zeros(288,1);
     ID_SOC = struct('Batt',zeros(96,1),'EV',zeros(96,1),'Building',zeros(96,1),'Pipe',zeros(96,1));
 
@@ -210,6 +228,7 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
         % flat p.eta_FC_e multiplier would silently mismatch what the
         % day-ahead MILP actually produced from that fuel level.
         fcElec = pwl_utils('eval', p.PWL.bkpt_e.x, p.PWL.bkpt_e.y, DA.PH2(h));
+        Php5(m) = DA.Php(h);
         fixedElec = p.eta_PV*Ps_m + fcElec - DA.Php(h) ...
             + DA.Pbatt_dis(h) - DA.Pbatt_ch(h) + DA.Pev_dis(h) - DA.Pev_ch(h);
         Pnet = fc.RT.Lelec(m) - fixedElec;
@@ -229,6 +248,7 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
     end
 
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
+    res.Php5 = Php5;
     res.Q5 = Q5;
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;

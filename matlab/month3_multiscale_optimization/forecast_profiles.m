@@ -155,6 +155,8 @@ function fc = forecast_profiles(seed, uncertaintyScale, hubScale, season)
 
     fc.hubScale = hubScale;   % recorded so any consumer can tell what size it holds
     fc.season   = sf.name;    % ditto for which season it holds
+    fc.ambientC = sf.ambientC;  % drives heatpump_curve.m; same number that
+                                % sets the degree-day heat factor above
     fc.seasonFactors = sf;
     fc.hours = hours; fc.slots15 = slots15; fc.slots5 = slots5;
     fc.DA.solar = solar_DA; fc.DA.Lelec = Lelec_DA; fc.DA.Lheat = Lheat_DA;

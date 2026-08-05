@@ -74,7 +74,24 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     nQ   = useQ * 2;                      % Qh and Qabs per block
     useNet = isfield(p, 'network') && isfield(p.network, 'enabled') && p.network.enabled;
 
-    NV = 16 + 1 + s + (s-1) + nQ;
+    % Heat-pump PWL, same structure and the same opt-in switch as the
+    % day-ahead layer. The curve depends on the day's ambient temperature,
+    % which the caller passes through fcNow.ambientC (simulate_multiscale_day
+    % copies it from the forecast); absent it, heatpump_curve defaults to the
+    % shoulder ambient.
+    useHP = isfield(p.HeatPump, 'usePWL') && p.HeatPump.usePWL;
+    if useHP
+        if isfield(fcNow, 'ambientC'); ambHP = fcNow.ambientC; else; ambHP = []; end
+        hp     = heatpump_curve(p, ambHP);
+        sHP    = hp.nSegments;
+        wHP    = hp.w;
+        copSeg = hp.slopes;
+        nHPu   = hp.needsBinaries * (sHP - 1);
+    else
+        sHP = 0; wHP = []; copSeg = []; nHPu = 0;
+    end
+
+    NV = 16 + 1 + s + (s-1) + nQ + sHP + nHPu;
     OFF = struct('Pgi',1,'Pge',2,'Ps',3, ...
                   'Bch',4,'Bdis',5,'Ech',6,'Edis',7, ...
                   'Lch',8,'Ldis',9,'Pch',10,'Pdis',11, ...
@@ -82,11 +99,15 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     segBase = 17; uBase = 17 + s;
     qOff  = 17 + s + (s-1) + 1;
     qaOff = qOff + 1;
+    hpSegBase = 17 + s + (s-1) + nQ;
+    hpUBase   = hpSegBase + sHP;
     ix    = @(block, off) block*NV + off;   % block 0 = stage1, 1..Nscen = stage2 scenarios
     ixSeg = @(block, k)   ix(block, segBase+k);
     ixU   = @(block, k)   ix(block, uBase+k);
     ixQ   = @(block)      ix(block, qOff);
     ixQa  = @(block)      ix(block, qaOff);
+    ixHP  = @(block, k)   ix(block, hpSegBase+k);
+    ixHPu = @(block, k)   ix(block, hpUBase+k);
     nCore = (1+Nscen)*NV;
     slackOff = struct('B',1,'E',2,'L',3,'P',4); % 4 devices x (pos,neg) = 8 slacks
     ixSlack = @(dev, sign) nCore + (slackOff.(dev)-1)*2 + sign; % sign: 1=pos,2=neg
@@ -113,6 +134,8 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         ub(ix(blk,OFF.Pch))  = p.Pipe.Pch_max;
         ub(ix(blk,OFF.Pdis)) = p.Pipe.Pdis_max;
         ub(ix(blk,OFF.Php))  = p.HeatPump.Pmax;
+        for k = 1:sHP;  ub(ixHP(blk,k))  = wHP(k); end
+        for k = 1:nHPu; ub(ixHPu(blk,k)) = 1;      end
         if useQ
             lb(ixQ(blk))  = -p.Inverter.Q_max;
             ub(ixQ(blk))  =  p.Inverter.Q_max;
@@ -205,8 +228,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     seg0 = arrayfun(@(k) ixSeg(0,k), 1:s);
     add_row([ix(0,OFF.Ps) seg0 ix(0,OFF.Php) ix(0,OFF.Pgi) ix(0,OFF.Pge) ix(0,OFF.Bdis) ix(0,OFF.Bch) ix(0,OFF.Edis) ix(0,OFF.Ech)], ...
         [p.eta_PV slopeE -1 1 -1 1 -1 1 -1], 'S', fcNow.Lelec);
-    add_row([seg0 ix(0,OFF.Php) ix(0,OFF.Ldis) ix(0,OFF.Lch) ix(0,OFF.Pdis) ix(0,OFF.Pch)], ...
-        [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcNow.Lheat);
+    add_heat_row(0, seg0, fcNow.Lheat);
     add_row([seg0 ix(0,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
     add_fillorder(0, seg0);
     add_inverter_and_network(0);
@@ -229,8 +251,7 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
         segS = arrayfun(@(k) ixSeg(sc,k), 1:s);
         add_row([ix(sc,OFF.Ps) segS ix(sc,OFF.Php) ix(sc,OFF.Pgi) ix(sc,OFF.Pge) ix(sc,OFF.Bdis) ix(sc,OFF.Bch) ix(sc,OFF.Edis) ix(sc,OFF.Ech)], ...
             [p.eta_PV slopeE -1 1 -1 1 -1 1 -1], 'S', fcs.Lelec);
-        add_row([segS ix(sc,OFF.Php) ix(sc,OFF.Ldis) ix(sc,OFF.Lch) ix(sc,OFF.Pdis) ix(sc,OFF.Pch)], ...
-            [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', fcs.Lheat);
+        add_heat_row(sc, segS, fcs.Lheat);
         add_row([segS ix(sc,OFF.PH2tot)], [ones(1,s) -1], 'S', 0); % concentrator
         add_fillorder(sc, segS);
         add_inverter_and_network(sc);
@@ -248,6 +269,9 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
     for blk = 0:Nscen
         for k = 1:(s-1)
             vartype(ixU(blk,k)) = 'I';
+        end
+        for k = 1:nHPu
+            vartype(ixHPu(blk,k)) = 'I';
         end
     end
 
@@ -290,6 +314,26 @@ function [committed, SOCnext, info] = intraday_dispatch(p, SOCnow, evAvailNow, e
                      'while PH2seg(%d)=%.6f < w(%d)=%.6f (not full).'], ...
                     blk, k+1, segvals(k+1), k, segvals(k), k, w(k));
             end
+        end
+    end
+
+    % Heat balance for one block. With the heat-pump PWL on, the single
+    % COP*Php term becomes sum_k COP_k*Php_seg(k) plus a concentrator tying
+    % the segments to the total, and (if the slopes require it) fill-order
+    % binaries. Identical treatment to the fuel cell in the same row.
+    function add_heat_row(blk, segIdx, Lheat)
+        if useHP
+            hpIdx = arrayfun(@(k) ixHP(blk,k), 1:sHP);
+            add_row([segIdx hpIdx ix(blk,OFF.Ldis) ix(blk,OFF.Lch) ix(blk,OFF.Pdis) ix(blk,OFF.Pch)], ...
+                    [slopeT copSeg 1 -1 1 -1], 'S', Lheat);
+            add_row([hpIdx ix(blk,OFF.Php)], [ones(1,sHP) -1], 'S', 0);   % concentrator
+            for k = 1:nHPu
+                add_row([ixHP(blk,k+1) ixHPu(blk,k)], [1 -wHP(k+1)], 'U', 0);
+                add_row([ixHP(blk,k)   ixHPu(blk,k)], [-1 wHP(k)],   'U', 0);
+            end
+        else
+            add_row([segIdx ix(blk,OFF.Php) ix(blk,OFF.Ldis) ix(blk,OFF.Lch) ix(blk,OFF.Pdis) ix(blk,OFF.Pch)], ...
+                    [slopeT p.HeatPump.COP 1 -1 1 -1], 'S', Lheat);
         end
     end
 

@@ -98,6 +98,13 @@ function sf = season_profile_factors(season)
 %   higher midday output. Anyone expecting "summer PV is much bigger" should
 %   look at the energy row, not the peak row.
 %
+%   AMBIENT TEMPERATURE. The same assumed monthly means that set the heat
+%   factors are exported as sf.ambientC, because the heat pump's COP curve
+%   (heatpump_curve.m) depends on ambient air temperature and must be driven
+%   by the SAME number that decides how much heat is demanded. Using one
+%   temperature for the load and a different one for the machine serving it
+%   would be incoherent, so there is exactly one.
+%
 %   HEAT DEMAND [SOURCED method, ASSUMED temperatures]. Degree-day method
 %   per VDI 3807 / VDI 2067 as used in Germany: room temperature 20 C,
 %   heating limit 15 C, so a day contributes (20 - T_mean) degree-days when
@@ -135,6 +142,9 @@ function sf = season_profile_factors(season)
 %     elecFactor    : multiplies the whole electrical demand curve
 %     heatFactor    : multiplies the SPACE-HEATING part of the heat curve
 %     dhw_kW        : unscaled domestic-hot-water baseline (5 kW at hubScale 1)
+%     ambientC      : assumed monthly mean ambient temperature (C), used by
+%                     BOTH the degree-day heat factor above and the heat
+%                     pump's COP curve
 %     pvPeakFactor  : multiplies the PV peak
 %     sunrise, sunset, dayLength_h : daylight window (hours, decimal)
 %     eveningPeakHour              : hour of the electrical evening peak
@@ -145,6 +155,7 @@ function sf = season_profile_factors(season)
     switch season
         case 'winter'
             sf.dayOfYear    = 15;
+            sf.ambientC     = 0.5;
             sf.elecFactor   = 1.2451;
             sf.heatFactor   = 1.7727;
             sf.pvPeakFactor = 0.3091;
@@ -153,12 +164,14 @@ function sf = season_profile_factors(season)
             % Every factor exactly 1 and the original 13-hour window: this
             % case must reproduce the pre-seasonal profiles bit for bit.
             sf.dayOfYear    = 105;
+            sf.ambientC     = 9.0;
             sf.elecFactor   = 1.0;
             sf.heatFactor   = 1.0;
             sf.pvPeakFactor = 1.0;
             sf.dayLength_h  = 13.0;
         case 'summer'
             sf.dayOfYear    = 196;
+            sf.ambientC     = 18.5;
             sf.elecFactor   = 0.7785;
             sf.heatFactor   = 0.0;
             sf.pvPeakFactor = 0.8952;

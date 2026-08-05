@@ -121,7 +121,52 @@ function p = multiscale_default_params(hubScale)
     % electricity would then flood the electrical balance too), removing
     % the genuine multi-source economic tradeoff a sector-coupled system
     % is supposed to exhibit. COP = heat output / electrical input.
-    p.HeatPump.COP  = 3.2;
+    p.HeatPump.COP  = 3.2;   % LEGACY constant, used only when usePWL = false
+    %
+    % LOAD- AND AMBIENT-DEPENDENT COP. The constant above modelled the
+    % highest-throughput converter in the hub -- roughly 15x the fuel cell's
+    % energy on a shoulder day -- with one number, while the PWL machinery
+    % was applied only to the fuel cell. heatpump_curve.m holds the curve,
+    % its manufacturer sourcing (Stiebel Eltron WPL 25 ACS, A-7/A2/A7 at
+    % W35), the declared part-load shape, and the numerical slope check that
+    % decides whether fill-order binaries are required.
+    %
+    % THREE MODES, and the distinction matters for the measurement:
+    %   usePWL = false            -> the legacy constant 3.2. Reproduces
+    %                                every pre-existing result EXACTLY.
+    %   usePWL = true, nSeg = 1   -> a one-segment chord of the SAME curve,
+    %                                i.e. a constant COP equal to the
+    %                                full-load value at that ambient.
+    %   usePWL = true, nSeg = n   -> the n-segment PWL.
+    % The PWL question is the SECOND against the THIRD -- same curve, same
+    % level, differing only in shape. Comparing the third against the legacy
+    % constant would measure a level change (3.2 -> ~4.8) and report it as a
+    % PWL benefit, which it is not. This mirrors exactly how Case 5 isolates
+    % the fuel cell's PWL with a 1-segment fit of its own curve.
+    % DEFAULT IS OFF, AND THE GATE IS WHY. main_month4i measures the
+    % n-segment PWL against a 1-segment chord of the same curve over 60
+    % paired draws: pooled -0.162% with a 95% interval of [-0.490, +0.166],
+    % i.e. indistinguishable from zero, against a cost of 96 extra binaries
+    % per day-ahead solve and +16% closed-loop solve time. By this
+    % project's own decision rule that is not worth shipping, so the
+    % default keeps the legacy constant and every pre-existing result
+    % reproduces exactly. The curve and its measurement remain available --
+    % set usePWL = true to enable them -- and the seasonal breakdown is the
+    % interesting part: PWL pays in winter and at the shoulder and is a
+    % RELIABLE COST in summer, because the heat pump then serves only a
+    % hot-water baseline and sits inside segment 1 where a uniform fit is
+    % at its most optimistic.
+    p.HeatPump.usePWL      = false;
+    p.HeatPump.nSegments   = 5;
+    p.HeatPump.copRated_func = @(T) 3.8926 + 0.1311*T;   % LS line through the datasheet
+    p.HeatPump.partLoad_func = @(u) (1.25 - 0.25*u) .* (1 - exp(-u/0.08));
+    % Breakpoint placement. 'uniform' matches the fuel cell's treatment and
+    % is the default so the two devices are compared like with like;
+    % 'curvature' concentrates breakpoints where the curve bends most and is
+    % measured against it in main_month4i.
+    p.HeatPump.placement   = 'uniform';
+    p.HeatPump.ambientMinC = -7.0;   % datasheet range; extrapolation refused
+    p.HeatPump.ambientMaxC =  7.0;
     p.HeatPump.Pmax = 8.0 * k;  % kW electrical (deliberately undersized relative
                               % to peak heat demand, so it cannot single-
                               % handedly cover every hour -- thermal storage

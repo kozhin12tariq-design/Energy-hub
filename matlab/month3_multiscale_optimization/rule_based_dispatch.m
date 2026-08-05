@@ -24,7 +24,11 @@ function res = rule_based_dispatch(p, fc)
 %        but charged only from SPARE HEAT-PUMP CAPACITY, so filling a store
 %        can never by itself start the fuel cell.
 %     5. Heat is served heat-pump-first, because it is the cheapest source
-%        per kWh of heat while electricity is cheaper than hydrogen.
+%        per kWh of heat while electricity is cheaper than hydrogen. The
+%        heat pump's COP comes from the SAME curve the optimizer uses
+%        (heatpump_curve.m) whenever that curve is active -- otherwise the
+%        comparison would measure who got the better machine, not who
+%        scheduled it better.
 %     6. The fuel cell runs for exactly two reasons, checked in order:
 %        (a) MUST-RUN -- the heat pump plus storage cannot cover the heat
 %            balance, so the fuel cell covers the deficit. This is physics,
@@ -72,7 +76,21 @@ function res = rule_based_dispatch(p, fc)
     priceExp = fc.DA.priceExport(hourOf5);
     medPrice = median(fc.DA.priceImport);
 
-    hpThermalMax = p.HeatPump.Pmax * p.HeatPump.COP;
+    % HEAT PUMP. The optimizer now models COP as a load- and
+    % ambient-dependent curve, so the heuristic must use the SAME machine or
+    % the comparison stops measuring control and starts measuring who was
+    % given the better heat pump. When the curve is active the heuristic
+    % converts between electrical and thermal through the same breakpoints;
+    % when it is off both fall back to the legacy constant.
+    useHPcurve = isfield(p.HeatPump, 'usePWL') && p.HeatPump.usePWL;
+    if useHPcurve
+        if isfield(fc, 'ambientC'); ambHP = fc.ambientC; else; ambHP = []; end
+        hpC = heatpump_curve(p, ambHP);
+        hpThermalMax = hpC.bkpt.y(end);
+    else
+        hpC = [];
+        hpThermalMax = p.HeatPump.Pmax * p.HeatPump.COP;
+    end
     bkE = p.PWL.bkpt_e;  bkT = p.PWL.bkpt_th;
 
     % Marginal electrical cost of the fuel cell at its rated point. One
@@ -123,7 +141,11 @@ function res = rule_based_dispatch(p, fc)
 
         % ---- Rule 5: heat pump first -----------------------------------
         hpTh = min(max(heatNeed, 0), hpThermalMax);
-        hpEl = hpTh / p.HeatPump.COP;
+        if useHPcurve
+            hpEl = invert_pwl(hpC.bkpt.x, hpC.bkpt.y, hpTh, p.HeatPump.Pmax);
+        else
+            hpEl = hpTh / p.HeatPump.COP;
+        end
         deficit = max(heatNeed - hpTh, 0);
 
         % ---- Rule 6a: fuel cell must-run to close the heat balance -----
