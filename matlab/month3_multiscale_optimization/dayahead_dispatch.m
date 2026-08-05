@@ -370,12 +370,21 @@ function sol = dayahead_dispatch(p, fc)
     b = [beq; bub];
     ctype = [repmat('S',nEq,1); repmat('U',nIneq,1)];
     vartype = repmat('C', nVar, 1);
-    for t = 1:nT
-        for k = 1:(s-1)
-            vartype(vixU(t,k)) = 'I';
-        end
-        for k = 1:nHPu
-            vartype(vixHPu(t,k)) = 'I';
+    % p.diag.relaxOrder is a DIAGNOSTIC ONLY, default off. It leaves the
+    % fill-order indicators continuous so the LP relaxation can be inspected
+    % directly -- the counterfactual that shows the binaries are load-bearing
+    % rather than decorative. Nothing in normal operation sets it, and
+    % multiscale_default_params does not define p.diag at all, so the
+    % isfield guard is what keeps every existing result untouched.
+    relaxOrder = isfield(p, 'diag') && isfield(p.diag, 'relaxOrder') && p.diag.relaxOrder;
+    if ~relaxOrder
+        for t = 1:nT
+            for k = 1:(s-1)
+                vartype(vixU(t,k)) = 'I';
+            end
+            for k = 1:nHPu
+                vartype(vixHPu(t,k)) = 'I';
+            end
         end
     end
 

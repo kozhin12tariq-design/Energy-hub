@@ -45,9 +45,16 @@ function [cost, corr] = hp_true_curve_cost(p, fc, R)
     copTrue  = hp.copRated * p.HeatPump.partLoad_func(max(u, 1e-9));
     heatTrue = copTrue .* Php;
 
-    % Shortfall converted back to electricity at the true marginal COP;
-    % grid import covers it.
-    dElec = (heatPlanned - heatTrue) ./ max(copTrue, 1e-6);
+    % Shortfall converted back to electricity and absorbed by grid import.
+    % The covering COP is FLOORED at the rated value for the reason set out
+    % at length in true_curve_cost.m: covering a shortfall means running the
+    % pump MORE, which moves it up its part-load curve, so the cycling-
+    % dominated COP it currently sits at is not the efficiency that applies
+    % to the extra heat. Dividing by that instead turns a 5 W modelling error
+    % at u = 0.001 into 2.6 kW of imaginary import, and measurement showed
+    % 70% of the whole summer correction coming from such intervals.
+    copCover = max(copTrue, hp.copRated);
+    dElec = (heatPlanned - heatTrue) ./ copCover;
 
     hourOf5 = ceil((1:288)/12)';
     pImp = fc.DA.priceImport(hourOf5); pExp = fc.DA.priceExport(hourOf5);

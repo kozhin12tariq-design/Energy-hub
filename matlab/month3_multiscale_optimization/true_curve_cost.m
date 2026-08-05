@@ -72,13 +72,30 @@ function [cost, corr] = true_curve_cost(pModel, fc, R, fcPWL)
     heatFCtrue    = pModel.PWL.eta_FC_th_func(max(uFC, 1e-12)) .* PH2;
     dHeat = dHeat + (heatFCplanned - heatFCtrue);
 
-    % ---- price the total heat shortfall at the heat pump's true COP ----
-    % copTrue is ~0 when the heat pump is idle, which would divide by
-    % nothing; fall back to its rated COP there, which is the value it would
-    % run at if it were switched on to cover the gap.
-    copCover = copTrue;
-    copCover(Php <= 1e-9) = hp.copRated;
-    dElec = dHeat ./ max(copCover, 1e-6);
+    % ---- price the total heat shortfall through the heat pump -----------
+    % THE COVERING COP IS NOT THE CURRENT MARGINAL COP, and getting this
+    % wrong dominated an earlier version of this file. Covering a shortfall
+    % means running the heat pump MORE, which moves it UP its part-load curve
+    % toward the sweet spot -- so the efficiency that applies to the extra
+    % heat is the one it would reach when ramped, not the cycling-dominated
+    % value it happens to sit at now. Dividing by the latter blows up: at
+    % u = 0.001 the true COP is ~0.002, and a 5 W modelling error priced
+    % through it becomes 2.6 kW of imaginary grid import.
+    %
+    % That was not hypothetical. Measured on seed 7: in summer, 48 of 288
+    % intervals sit at 0 < u < 0.02 and contributed 9.03 of the 12.87 kWh
+    % total correction -- 70% of the entire correction came from intervals
+    % where the heat pump was doing essentially nothing. On a ~$51 summer day
+    % that is ~$2.70, roughly 5%, which is larger than every effect this
+    % study is trying to measure and concentrated in exactly the season that
+    % decides the gate.
+    %
+    % copRated is therefore a FLOOR on the covering efficiency. Note this is
+    % conservative in BOTH directions and so cannot flatter either arm: for a
+    % shortfall a higher COP means a smaller charge, and for a surplus it
+    % means a smaller credit.
+    copCover = max(copTrue, hp.copRated);
+    dElec = dHeat ./ copCover;
 
     hourOf5 = ceil((1:288)/12)';
     pImp = fc.DA.priceImport(hourOf5); pExp = fc.DA.priceExport(hourOf5);

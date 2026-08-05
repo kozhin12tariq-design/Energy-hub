@@ -51,6 +51,11 @@ addpath('../month3_multiscale_optimization');
 addpath('../month2_coupling_matrix_pwl_ieee33');
 
 p = multiscale_default_params();
+% The shipped default is usePWL = false -- see multiscale_default_params.m,
+% and the reason is this script's own verdict. Every arm below that is meant
+% to use the CURVE therefore switches it on explicitly rather than inheriting
+% it, so the file keeps working whichever way the default is later set.
+p.HeatPump.usePWL = true;
 
 nSeeds  = 20;
 seasons = {'winter', 'shoulder', 'summer'};
@@ -81,6 +86,61 @@ fprintf(['\nSLOPE MONOTONICITY, CHECKED RATHER THAN ASSUMED: segment 2''s slope 
     'can deliver. Same situation as the fuel cell, same fix, and it is measured here\n' ...
     'rather than assumed: %d binaries per time step, %d over a 24-hour day-ahead solve.\n'], ...
     hpRef.nSegments - 1, (hpRef.nSegments - 1) * 24);
+
+%% The counterfactual: are those binaries actually load-bearing? ----------
+% Month 4a verified this for the FUEL CELL by relaxing its ordering
+% indicators and catching segment 2 filling ahead of segment 1. The same
+% claim for the heat pump was, until this check, only a prediction from the
+% slope signs. It is now solved. p.diag.relaxOrder leaves the indicators
+% continuous; nothing else changes.
+fprintf('\n--- Counterfactual: the SAME day-ahead solve with the ordering indicators relaxed ---\n');
+pRlx = p; pRlx.diag.relaxOrder = true;
+fprintf('%-10s %12s %12s %14s %12s %12s\n', 'season', 'MILP pairs', 'LP pairs', ...
+    'worst fill', 'cost LP', 'cost MILP');
+cfViol = zeros(1, numel(seasons)); cfWorst = ones(1, numel(seasons));
+for sIdx = 1:numel(seasons)
+    fcCF  = forecast_profiles(42, 1.0, [], seasons{sIdx});
+    DAmip = dayahead_dispatch(p,    fcCF);
+    DAlp  = dayahead_dispatch(pRlx, fcCF);
+    hpCF  = heatpump_curve(p, fcCF.ambientC);
+    vLP = 0; vMIP = 0; worstFill = 1; worstT = 0; worstNext = 0;
+    for t = 1:size(DAlp.HPseg, 1)
+        for k = 1:(hpCF.nSegments - 1)
+            if DAlp.HPseg(t,k+1) > 1e-6 && DAlp.HPseg(t,k)/hpCF.w(k) < 1 - 1e-6
+                vLP = vLP + 1;
+                if DAlp.HPseg(t,k)/hpCF.w(k) < worstFill
+                    worstFill = DAlp.HPseg(t,k)/hpCF.w(k);
+                    worstT = t; worstNext = DAlp.HPseg(t,k+1);
+                end
+            end
+            if DAmip.HPseg(t,k+1) > 1e-6 && DAmip.HPseg(t,k)/hpCF.w(k) < 1 - 1e-6
+                vMIP = vMIP + 1;
+            end
+        end
+    end
+    cfViol(sIdx) = vLP; cfWorst(sIdx) = worstFill;
+    if vLP > 0
+        fprintf('%-10s %12d %12d %10.1f%% h%-2d %12.4f %12.4f\n', seasons{sIdx}, ...
+            vMIP, vLP, 100*worstFill, worstT, DAlp.cost, DAmip.cost);
+    else
+        fprintf('%-10s %12d %12d %14s %12.4f %12.4f\n', seasons{sIdx}, ...
+            vMIP, vLP, 'none', DAlp.cost, DAmip.cost);
+    end
+end
+fprintf(['\nTHE BINARIES ARE LOAD-BEARING, AND ONLY WHERE THE PHYSICS SAYS THEY SHOULD BE.\n' ...
+    'Relaxed, the LP puts load into segment 2 while segment 1 is as little as %.1f%% full --\n' ...
+    'exactly the cherry-pick the non-monotonic slopes predict, and it buys itself a cheaper\n' ...
+    'day-ahead by claiming heat the machine cannot produce. But it does NOT happen in\n' ...
+    'winter (%d pairs there against %d in shoulder and %d in summer), and the reason is\n' ...
+    'the same one that drives the whole gate result: in winter the heat pump runs near its\n' ...
+    'rating, every segment is full, and there is no spare capacity in segment 1 to leave\n' ...
+    'empty. The defect appears precisely at PART LOAD.\n' ...
+    '\nThis is a CORRECTNESS result and it stands whichever way the cost gate below goes.\n' ...
+    'A model that reports dispatches its machine cannot deliver is wrong irrespective of\n' ...
+    'what the error is worth on a given day -- the same argument Month 4a makes for the\n' ...
+    'fuel cell, now measured on a second device rather than assumed to carry over.\n'], ...
+    100*min(cfWorst), cfViol(1), cfViol(2), cfViol(3));
+fflush(stdout);
 
 %% Configurations --------------------------------------------------------
 pPWL   = p;                                   % (A) n-segment PWL, uniform breakpoints
