@@ -2564,3 +2564,49 @@ automatically buy a cheaper dispatch.** Month 4c already documents the general
 form of it — `Gap(%)` is not a measure of model quality — and this is now the
 second independent confirmation.
 
+## Solve time and memory — the sweep's timing column badly understates both
+
+The segment sweep's own `Solve(s)` column shows 0.147 s at n = 5 and 0.236 s at
+n = 10, implying the change costs **+0.089 s** per day-ahead solve. **That is
+the wrong number to quote**, and the reason is structural: the sweep measures
+**one configuration**, and it is not the hard case.
+
+Measured directly, across price regimes and seasons:
+
+| Price | Season | n = 5 | n = 10 | ratio |
+|---|---|---|---|---|
+| today | winter | 0.249 s | 1.140 s | 4.6× |
+| today | shoulder | 0.083 s | 0.128 s | 1.5× |
+| today | summer | 0.081 s | 0.117 s | 1.4× |
+| **doeTarget** | **winter** | **0.269 s** | **3.713 s** | **13.8×** |
+| doeTarget | shoulder | 0.091 s | 0.125 s | 1.4× |
+| doeTarget | summer | 0.076 s | 0.108 s | 1.4× |
+
+**The mechanism is whether the MILP has to search.** Where the fuel cell does
+not run, the extra fill-order binaries are trivially fixed at zero and the cost
+is ~1.4× — the model is bigger but not harder. Where the fuel cell runs at
+*part load*, the branch-and-bound tree has to resolve which of 10 segments is
+active in each of 24 hours instead of which of 5, and the cost is **+3.4 s per
+day-ahead solve**, roughly **40× the sweep's figure**.
+
+Quote the **range**, not the single configuration: **1.4× where the fuel cell is
+idle, up to 13.8× where it runs at part load.**
+
+### Memory is the harder limit, and it was hit
+
+At n = 5 this project routinely ran three scripts concurrently on a 16 GB
+machine. At n = 10 that layout **OOM-kills**: `main_month4i` was killed at
+**8.6 GB RSS**, and `main_month4j` followed. Four OOM kills were recorded before
+the runs were re-serialised.
+
+The growth is **not** in the day-ahead solve — that stays cheap even with both
+devices' PWL enabled (0.413 s, winter, 432 binaries). It is in the **intraday
+two-stage stochastic MILP**, where the scenario structure multiplies the segment
+variables, and it accumulates across draws within a script.
+
+This is a scheduling consequence rather than a model defect, and it was fixed by
+running sequentially rather than by touching the model. But it belongs in the
+record: **n = 10 costs memory as well as time, and the margin on a 16 GB machine
+is now thin.** A study that quotes only the +0.089 s figure would leave a reader
+unprepared for a job that dies at 8.6 GB.
+

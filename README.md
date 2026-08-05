@@ -326,6 +326,31 @@ makes the *cost* case fail. A model that reports impossible dispatches is
 wrong irrespective of what the error is worth on a given day, so the heat
 pump needs those binaries the moment its curve is modelled at all.
 
+## Segment count: n = 10, and what it cost
+
+The default PWL segment count is **10**, selected where the realized-cost gap
+converges (−0.02% at n = 10, against −0.12% at n = 5 and −4.36% at n = 1).
+Beyond n ≈ 36, extra segments cut curve-fit error without moving any reported
+dispatch number while solve time grows superlinearly.
+
+**Moving from 5 to 10 cost the project its strongest single claim, and that is
+reported rather than absorbed.** "PWL beats constant efficiency" went from
+**resolved** (+1.42%, 44/60 draws, sign test *p* = 0.00039) to
+**outlier-driven** (+0.87%, 32/60, *p* = 0.7). Per season, shoulder fell from a
+resolved +0.93% to a null and summer's reliable cost grew from −0.20% to
+−0.94%; winter was untouched. See `VALIDATION.md` for the mechanism.
+
+**Solve time — quote the range, not the sweep's single figure.** The sweep's
+`Solve(s)` column implies +0.089 s per day-ahead solve. Measured across price
+regimes and seasons the real cost is **1.4× where the fuel cell is idle, up to
+13.8× (0.269 → 3.713 s) where it runs at part load** — roughly 40× the sweep's
+figure, because the sweep measures one configuration that is not the hard case.
+Binaries per device per 24-hour solve: 96 → 216.
+
+**Memory is the harder limit.** Three concurrent scripts ran fine at n = 5; at
+n = 10 the same layout OOM-kills at ~8.6 GB RSS. The growth is in the intraday
+stochastic MILP, not the day-ahead solve, and the runs are now serialised.
+
 ## Confidence intervals on the headline claims
 
 `main_month4e_monte_carlo.m`. Three numbers carried the modelling argument
