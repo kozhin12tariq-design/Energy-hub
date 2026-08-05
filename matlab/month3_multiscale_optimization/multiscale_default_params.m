@@ -66,9 +66,9 @@ function p = multiscale_default_params(hubScale)
     % operative electrical efficiency when nothing in the dispatch reads it.
     % They are removed. The fuel cell's electrical and thermal conversion is
     % defined ONLY by the segmented PWL curves in p.PWL below, and the true
-    % marginal efficiency varies with load (0.4453/0.5078/0.4578 over the
-    % segments the fuel cell actually operates in at nSegments=5), which is
-    % the entire point of the PWL model. Month 1/2's separate
+    % marginal efficiency varies with load (0.4079/0.4828/0.5089/0.5067 over
+    % the first segments at the current nSegments=10), which is the entire
+    % point of the PWL model. Month 1/2's separate
     % energy_hub_default_params.m still defines its own scalar values and is
     % unaffected: those drive the constant-efficiency coupling-matrix demos,
     % which are a different (and deliberately simpler) model.
@@ -90,15 +90,22 @@ function p = multiscale_default_params(hubScale)
     % dayahead_dispatch.m for how the segment/ordering-binary structure
     % is built from these breakpoints.
     %
-    % Both curves are S-shaped / non-concave (verified numerically: FC
-    % electrical slopes at nSegments=5 are 0.4453, 0.5078, 0.4578,
-    % 0.3245, 0.1146 -- segment 2's slope EXCEEDS segment 1's, so a
-    % plain LP relaxation would cherry-pick segment 2 while leaving
-    % segment 1 empty, reporting more electricity than the fuel cell can
-    % physically produce at that fuel level. Fill-order binary variables
-    % (u_1..u_{s-1} per time step) are therefore mandatory, not optional:
+    % Both curves are S-shaped / non-concave (verified numerically at the
+    % CURRENT segment count, not carried over from an older one: FC
+    % electrical slopes at nSegments=10 are 0.4079, 0.4828, 0.5089,
+    % 0.5067, 0.4812, 0.4344, 0.3676, 0.2814, 0.1764, 0.0528 -- segments
+    % 2 and 3 rise ABOVE segment 1, so a plain LP relaxation would
+    % cherry-pick them while leaving segment 1 empty, reporting more
+    % electricity than the fuel cell can physically produce at that fuel
+    % level. Fill-order binary variables (u_1..u_{s-1} per time step) are
+    % therefore mandatory, not optional:
     % PH2_seg(k+1) <= w(k+1)*u_k and PH2_seg(k) >= w(k)*u_k forces
     % segment k+1 to stay empty until segment k is completely full.
+    % (At nSegments=5 the slopes were 0.4453, 0.5078, 0.4578, 0.3245,
+    % 0.1146. The peak is SHARPER at 10 -- the rise from segment 1 is
+    % 0.0749 against 0.0625 -- because a finer grid resolves the curve's
+    % steep initial rise instead of averaging it away, so refining the
+    % model makes the binaries MORE necessary rather than less.)
     %
     % SCALING THE FUEL CELL DOES NOT DISTURB THE CURVES. pwl_utils('fit')
     % samples eta at load FRACTIONS u = 0..1 and returns breakpoints
@@ -107,7 +114,24 @@ function p = multiscale_default_params(hubScale)
     % i.e. every efficiency -- bit-identical. The non-concavity that makes
     % the fill-order binaries mandatory is a property of eta(u) and is
     % unaffected by hub size.
-    p.PWL.nSegments = 5;      % breakpoints per curve = nSegments+1
+    % SEGMENT COUNT, CHOSEN AT THE POINT WHERE THE REALIZED-COST GAP
+    % CONVERGES, not by preference. main_month4c sweeps n over
+    % {1,2,5,10,20,36,50,75,100,150} and reports the gap between planned
+    % and realized cost:
+    %
+    %   n=1  gap -4.36%    n=10 gap -0.02%     <- converged
+    %   n=2  gap +1.45%    n=20 gap -0.01%
+    %   n=5  gap -0.12%    n=36 gap -0.00%
+    %
+    % 5 is the first count that is not WRONG; 10 is the first at which the
+    % cost gap has converged, and it is the bottom of the practical band
+    % (n=10 to n=36) that main_month4c already identified. The cost is
+    % +0.089 s per day-ahead MILP solve (0.147 -> 0.236 s in the sweep's
+    % own timing column) and 216 fill-order binaries per device per
+    % 24-hour solve instead of 96. Above ~36 the curve-fit error keeps
+    % falling while no reported dispatch number moves, and solve time
+    % grows superlinearly, so more is not better either.
+    p.PWL.nSegments = 10;     % breakpoints per curve = nSegments+1
     p.PWL.FC_H2_max = 150 * k;  % kW fuel, rated/maximum H2 input (shared
                               % Pmax for both curves and the PH2_total bound)
     p.PWL.eta_FC_e_func  = @(u) 0.30 + 0.35*sqrt(u) - 0.28*u.^2;
@@ -157,8 +181,17 @@ function p = multiscale_default_params(hubScale)
     % RELIABLE COST in summer, because the heat pump then serves only a
     % hot-water baseline and sits inside segment 1 where a uniform fit is
     % at its most optimistic.
+    % The gate figures quoted above were measured at nSegments = 5. This
+    % moves to 10 WITH the fuel cell -- both devices together, because a
+    % mixed default would make every downstream comparison ambiguous about
+    % which device's resolution produced a difference. The gate is re-run at
+    % 10 and the before/after is in VALIDATION.md; the slope check is
+    % re-verified rather than assumed, and hp.needsBinaries still returns
+    % true in every season (the rise from segment 1 is LARGER at 10, 1.80
+    % against 0.32 at the shoulder, because a finer grid resolves the
+    % low-load cycling penalty instead of averaging it away).
     p.HeatPump.usePWL      = false;
-    p.HeatPump.nSegments   = 5;
+    p.HeatPump.nSegments   = 10;
     p.HeatPump.copRated_func = @(T) 3.8926 + 0.1311*T;   % LS line through the datasheet
     p.HeatPump.partLoad_func = @(u) (1.25 - 0.25*u) .* (1 - exp(-u/0.08));
     % Breakpoint placement. 'uniform' matches the fuel cell's treatment and
