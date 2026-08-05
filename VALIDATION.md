@@ -2447,3 +2447,39 @@ It measures **cost**, under one tariff structure, on three representative days,
 at one hub size. It says nothing about whether PWL is needed for
 **feasibility** — and that argument is independent and stronger, measured for
 both devices above.
+
+## Files touched
+
+- **Task 1**: new `heatpump_curve.m`, `hp_true_curve_cost.m`, `true_curve_cost.m`,
+  `approx_error.m`; `multiscale_default_params.m`, `dayahead_dispatch.m`
+  (HP segments + the `p.diag.relaxOrder` diagnostic), `intraday_dispatch.m`,
+  `simulate_multiscale_day.m` (`res.Php5`), `forecast_profiles.m`,
+  `season_profile_factors.m`, `rule_based_dispatch.m`
+- **Task 1 gate**: new `main_month4i_heatpump_pwl_gate.m`
+- **Tasks 2–3**: nothing — the gate did not pass
+- **Task 4**: new `main_month4j_pwl_device_table.m`
+- **Docs**: `README.md`, `VALIDATION.md`
+
+No folder moved, renamed, merged or split. Exactly one hub throughout. No new
+device — the electrolyzer remains a Month 2a demonstration and is absent from
+the dispatch hub.
+
+## Claims withdrawn this session
+
+Recorded explicitly, because both were reported confidently before being
+re-measured, and a reader of an earlier draft is entitled to know which way
+they went.
+
+| Withdrawn claim | Replaced by |
+|---|---|
+| Curvature placement rescues the gate: **+0.700%** [+0.394, +1.005], resolved | **−0.137%** [−0.580, +0.307], spans zero; *worse* than uniform in summer (−2.211% vs −1.419%) |
+| Throughput × curvature **orders** the cases correctly | It does **not** order the four cells; only 2 of 4 resolve, and the unresolved pair runs backwards |
+| The two devices have **comparable curvature** | The heat pump is **2.8× flatter** (0.38 vs 1.06) |
+| The heat pump has **~15×** the fuel cell's throughput | **8.4×**, measured on a common 60-draw basis |
+
+Both of the first two were artifacts of the covering-COP defect or of a
+mixed-basis comparison, not of the physics. The gate verdict itself — **not
+passed** — held under both the defective and the corrected convention, which is
+why the decision to skip Tasks 2 and 3 stands. In fact it stands *more* firmly
+after the fix: the defective numbers were the ones that made a rescue look
+available.
