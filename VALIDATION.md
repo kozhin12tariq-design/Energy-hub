@@ -1955,3 +1955,467 @@ No folder moved, renamed, merged or split. Exactly one hub throughout. No
 Sankey diagrams. No existing finding removed or softened — three were
 narrowed to shoulder-season scope with the seasonal evidence attached, and
 one baseline defect was fixed with the before/after margin recorded.
+
+---
+
+# Per-device PWL: extending it beyond the fuel cell, and measuring whether it pays
+
+Four tasks, structured as a **gate**: Task 1 puts PWL on the heat pump and
+measures it; Tasks 2 and 3 were to follow *only if* Task 1's benefit was
+statistically distinguishable from zero. It was not. **Tasks 2 and 3 were
+therefore not run**, which is the instructed behaviour and also the useful
+one — it bounds the technique instead of extending it on faith.
+
+## Regression anchors — re-verified after the session
+
+| Check | Value | Status |
+|---|---|---|
+| IEEE 33 base case (no hub) | 202.677 kW, 0.9131 pu at bus 18 | unchanged |
+| `ieee33_data` assertions | 3715 kW / 2300 kVAr | pass |
+| Fuel-cell curve-fit columns n=1…150 | MaxErrE 42.7160 → 0.0061 kW | unchanged |
+| Fuel-cell segment slopes (n=5) | 0.4453 0.5078 0.4578 0.3245 0.1146 | unchanged |
+| Fill-order binaries, fuel cell | silent normally; still fire under LP relaxation | pass |
+| Fill-order binaries, heat pump | silent normally; **newly measured** under LP relaxation | pass — see below |
+| Day-ahead cost with HP PWL **off** | 200.796066487 — bit-identical to the pre-session code under `git stash` | exact |
+| Seasonal realized costs with HP PWL off | 843.1808 / 229.6339 / 51.0029 | unchanged |
+| Monte Carlo protocol | 60 draws = 20 seeds × 3 seasons, paired | unchanged |
+| Exactly one hub | one bus substituted per solve, everywhere | pass |
+| No new device | electrolyzer still Month 2a-only, absent from dispatch | pass |
+| All `main_month*.m` | run end-to-end (now 14 scripts) | pass |
+
+The bit-identity row is the one that matters most. Every device given a PWL
+model below reproduces the **existing** results exactly when its PWL is
+disabled, and that was checked by stashing the working tree and diffing the
+numbers, not by inspection.
+
+---
+
+## Task 1 — heat-pump COP as a PWL curve
+
+### The diagnosis that motivated it
+
+PWL had been applied to exactly one device, and it was the **lowest**-throughput
+converter in the hub:
+
+| Device | Shoulder-day throughput | Had PWL? |
+|---|---|---|
+| Fuel cell | 43.5 kWh | yes |
+| Heat pump | 634 kWh electrical | no |
+| PV | 1922 kWh | no |
+
+That is why Month 4e measured the fuel cell's PWL benefit at **−0.20% in
+summer**, where the fuel cell moves 0 kWh. If throughput is what makes PWL
+pay, the heat pump should be the best case available.
+
+### The curve, sourced and labelled per number
+
+`heatpump_curve.m`.
+
+| Element | Basis | Value |
+|---|---|---|
+| Ambient dependence | **[SOURCED]** Stiebel Eltron WPL 25 ACS rating points at W35 flow: A−7 → 2.98, A2 → 4.14, A7 → 4.82 | `COP_rated(T) = 3.8926 + 0.1311·T`, reproducing all three to within 0.01 |
+| Range | **[REFUSED]** extrapolation beyond the characterised −7…+7 °C | ambient **clamped** |
+| Part-load shape | **[ASSUMED]**, declared not sourced — EN 14825 part-load tables for this unit were unreachable | `f(u) = (1.25 − 0.25u)(1 − e^{−u/0.08})` |
+
+The refusal has a consequence and it is stated rather than hidden: a summer
+ambient of 18.5 °C would give COP 6.3 by extrapolation, which the datasheet
+does not support, and summer heat demand here is domestic hot water, which
+needs a **higher** flow temperature than W35 and would therefore have a
+**lower** COP, not a higher one. So ambient is clamped, shoulder and summer
+share the A7 curve, and the seasonal coupling this produces is a **winter
+penalty** — the physically real part — rather than a summer bonus, which
+would not be.
+
+The part-load shape is anchored at `f(1) = 1`, so the rating point is the
+manufacturer's number and not a fitted one. Peak is +15% at u ≈ 0.3; the
+low-load penalty is −42% at u = 0.05, from compressor cycling.
+
+### Slope monotonicity — checked numerically, not assumed
+
+| Season | Ambient (raw → clamped) | COP rated | Segment slopes (n = 5) |
+|---|---|---|---|
+| winter | 0.5 → 0.5 | 3.958 | 4.3599 **4.6825** 4.0123 3.5688 3.1672 |
+| shoulder | 9.0 → 7.0 | 4.810 | 5.2985 **5.6906** 4.8761 4.3371 3.8491 |
+| summer | 18.5 → 7.0 | 4.810 | 5.2985 **5.6906** 4.8761 4.3371 3.8491 |
+
+Segment 2's slope **exceeds** segment 1's in every season, so the slopes are
+**not** monotonically decreasing and **fill-order binaries are required**. The
+mechanism is the low-load cycling penalty: the first slice of load is the
+*least* efficient, so an LP relaxation would fill segment 2 while segment 1
+sits empty and claim more heat per kWh than the machine can deliver. Same
+situation as the fuel cell, same fix — but `hp.needsBinaries` carries the
+verdict from a numerical test, and the dispatch files act on that flag rather
+than adding binaries by reflex.
+
+Cost of the binaries: **4 per time step, 96 over a 24-hour day-ahead solve**,
+16 per intraday solve.
+
+### Are those binaries load-bearing? Measured, not carried over
+
+Month 4a verified this for the **fuel cell** by relaxing its ordering
+indicators and catching segment 2 filling ahead of segment 1. For the heat
+pump the same claim was, until this session, only a prediction from the slope
+signs. `p.diag.relaxOrder` (a diagnostic flag, default off, guarded by
+`isfield` so it cannot touch any existing result) leaves the indicators
+continuous and nothing else changes:
+
+| Season | MILP out-of-order pairs | LP out-of-order pairs | worst fill of segment 1 | cost LP | cost MILP |
+|---|---|---|---|---|---|
+| winter | 0 | **0** | none | 653.2369 | 653.2369 |
+| shoulder | 0 | **3** | 2.9% (h2) | 170.8524 | 170.8560 |
+| summer | 0 | **6** | 26.6% (h8) | 31.5694 | 31.6267 |
+
+The relaxation puts load into segment 2 while segment 1 is as little as **2.9%
+full** — exactly the cherry-pick the non-monotonic slopes predict — and buys
+itself a cheaper day-ahead by claiming heat the machine cannot produce.
+
+It does **not** happen in winter, and the reason is the same one that drives
+the whole gate result: in winter the heat pump runs near its rating, every
+segment is full, and there is no spare capacity in segment 1 to leave empty.
+**The defect appears precisely at part load.** That is worth recording as a
+measured seasonal contrast rather than a blanket "the binaries always fire",
+which would have been the easier and wronger claim.
+
+This is a **correctness** result and it stands whichever way the cost gate
+below goes.
+
+Applied at all three dispatch levels: day-ahead (`dayahead_dispatch.m`),
+intraday (`intraday_dispatch.m` via a shared `add_heat_row` helper so both
+stages cannot drift), and real-time — where the LP is electrical-only, so the
+heat pump enters through the setpoint it inherits, now recorded as `res.Php5`.
+
+### A defect in the measuring instrument, found and fixed before the gate was read
+
+Both PWL arms have to be priced against the same physics or the comparison
+measures two different heat pumps. `hp_true_curve_cost.m` does that: it takes
+the electricity the schedule committed, converts it to heat through the
+breakpoints the *planner* used, converts back through the *true* continuous
+COP, and lets grid import absorb the difference.
+
+The first version divided that heat shortfall by the heat pump's **current
+marginal COP**. That is wrong, and wrong in a way that mattered. Covering a
+shortfall means running the pump *more*, which moves it **up** its part-load
+curve toward the sweet spot — so the efficiency that applies to the extra heat
+is the one it reaches when ramped, not the cycling-dominated value it happens
+to sit at. At `u = 0.001` the true COP is ≈ 0.002, so a **5 W** modelling
+error priced through it becomes **2.6 kW** of imaginary grid import.
+
+This was not hypothetical, and it was not small. Measured on seed 7:
+
+| Season | intervals with heat pump on | intervals at 0 < *u* < 0.02 | \|Δelec\| from those intervals | total \|Δelec\| |
+|---|---|---|---|---|
+| winter | 288 | 0 | 0.000 kWh | 0.707 kWh |
+| shoulder | 243 | 6 | 1.246 kWh | 2.447 kWh |
+| summer | 162 | **48** | **9.034 kWh** | 12.874 kWh |
+
+**In summer, 70% of the entire correction came from intervals where the heat
+pump was doing essentially nothing** — about $2.70 on a ~$51 day, roughly 5%.
+That is larger than every effect this session set out to measure, and it was
+concentrated in exactly the season that decides the gate.
+
+The fix floors the covering COP at the rated value. It is conservative in
+**both** directions and therefore cannot flatter either arm: for a shortfall a
+higher COP means a smaller charge, for a surplus a smaller credit. After the
+fix the corrections are fractions of a dollar (winter −0.13, shoulder −0.15,
+summer +0.37 on seed 7) instead of dominated by numerical noise.
+
+**Every gate and table number below was produced after this fix.** The figures
+carried in an earlier draft of these notes came from the defective convention
+and have been re-measured rather than patched.
+
+### The gate — 60 draws, paired, PWL vs a 1-segment chord of the same curve
+
+> **PENDING RE-MEASUREMENT.** Every cost figure in this subsection was
+> produced with the defective covering-COP convention described above and
+> is therefore not trustworthy. The gate is being re-run; these numbers
+> will be **replaced, not patched**. They are left visible rather than
+> deleted so the record shows what changed and why.
+
+
+The comparison is **PWL against a chord of the identical curve**, not against
+the legacy constant. That isolates the segmentation from the curve.
+
+| | mean % | median | sd | 95% CI (t) | 95% CI (boot) | sign+ | sign p |
+|---|---|---|---|---|---|---|---|
+| Benefit of HP PWL | **−0.162** | 0.218 | 1.290 | **[−0.490, +0.166]** | [−0.490, +0.160] | 40/60 | 0.013 |
+
+**Verdict: direction consistent but the mean interval spans zero. GATE NOT PASSED.**
+
+Per season, and this is where the pooled null comes from:
+
+| Season | mean % | median | 95% CI (t) | sign+ | verdict |
+|---|---|---|---|---|---|
+| winter | +0.244 | 0.218 | [+0.203, +0.285] | 20/20 | distinguishable from zero |
+| shoulder | +1.048 | 0.978 | [+0.849, +1.248] | 20/20 | distinguishable from zero |
+| summer | **−1.778** | −1.577 | [−2.113, −1.443] | **0/20** | **consistently opposite — a reliable cost** |
+
+The pooled null is not noise. It is **two resolved effects cancelling**, and
+reporting only the pooled figure would hide that.
+
+### Why the sign flips — measured, not guessed
+
+| Season | median load *u* | frac in seg 1 | PWL err (kW) | chord err (kW) | curvature-placed err (kW) |
+|---|---|---|---|---|---|
+| winter | 0.970 | 0.00 | −0.143 | −2.664 | −1.551 |
+| shoulder | 0.508 | 0.01 | −0.270 | −9.371 | −3.440 |
+| summer | 0.124 | **0.70** | **+1.461** | −2.213 | −0.695 |
+
+`+` means the model **over-promises** heat. This project already established
+for the fuel cell that optimism and pessimism are not symmetric in cost — a
+shortfall is covered at the import tariff while a surplus is only worth the
+export price — so the **sign** of that column predicts the sign of the cost
+penalty, and it does.
+
+In winter the heat pump runs near its rating and crosses every segment, so
+5 segments beat a chord and PWL pays. In summer the only heat demand is a flat
+domestic-hot-water baseline, the pump sits at ~13% load, and it lives almost
+entirely **inside segment 1** — where a uniform 5-segment fit averages the
+curve's steepest rise into one wide chord of slope 5.30 against a true COP near
+4.70 there. **The finer model is the more optimistic one exactly where the
+device operates**, and optimism costs money.
+
+So the failure is not "PWL does not help a heat pump". It is "uniform
+breakpoints put the coarsest approximation exactly where this curve bends most,
+and a device that operates only in that region is worse off with them than
+without them."
+
+### The indicated fix was tested, and it works — but it is not the gate
+
+Same segment count, `'curvature'` placement (already implemented in Month 2a,
+no new fitting code):
+
+```
+breakpoints at u = 0.000 0.014 0.034 0.071 0.337 1.000
+slopes           = 0.976 2.863 4.795 6.067 4.447
+binaries still required: yes
+```
+
+Four of five breakpoints fall below u = 0.34. The worst low-load over-promise
+falls from **+4.85 kW to +0.32 kW** and the mean error changes sign to the safe
+direction.
+
+| | mean % | 95% CI (t) | sign+ | sign p | verdict |
+|---|---|---|---|---|---|
+| Curvature-placed vs chord | **+0.700** | **[+0.394, +1.005]** | 50/60 | 1.6e−07 | resolved |
+| — winter | +0.068 | [+0.065, +0.071] | | | resolved |
+| — shoulder | +1.863 | [+1.651, +2.074] | | | resolved |
+| — summer | +0.169 | [−0.516, +0.853] | | | not resolved |
+
+This is reported as **diagnosis, not as a passed gate**. The gate was specified
+on the uniform configuration and it failed; re-running it with a placement
+chosen *after* seeing which placement loses would be tuning the curve toward a
+favourable answer, which the session rules forbid. What the curvature result
+legitimately establishes is the *mechanism*: the loss was breakpoint placement,
+not segmentation per se. Even so, the benefit is +0.700% for 96 binaries and
++15% solve time, and summer still does not resolve.
+
+### What the complexity costs
+
+| Quantity | Value |
+|---|---|
+| Mean closed-loop solve time, PWL | 2.870 s |
+| Mean closed-loop solve time, chord | 2.486 s |
+| **Added solve time** | **+15.4%** |
+| Added binaries, day-ahead (24 h) | 96 |
+| Added binaries, per intraday solve | 16 |
+| Mean HP electricity, PWL / chord | 432.7 / 455.4 kWh |
+| Mean true-curve correction, PWL / chord | +0.55 / −1.50 $ |
+
+### Context that is *not* the gate
+
+Curve vs the legacy constant COP 3.2: **+17.21%**, 95% CI [+15.21, +19.21],
+60/60 draws. This is a **level** change, not a PWL result — the legacy model
+assumed 3.2 everywhere while the sourced curve gives 4.81 at the shoulder
+rating point and 3.96 in winter. A better heat pump is cheaper to run; that is
+arithmetic. Quoting it as a PWL benefit would be the same category error this
+project already refuses for the 72.1% headline. It is recorded because the
+Month 3 and Month 4a seasonal cost figures move by this much when the curve is
+enabled — which is why `p.HeatPump.usePWL` **defaults to false**, so every
+pre-existing number in the repository still reproduces.
+
+---
+
+## Tasks 2 and 3 — deliberately not run
+
+Task 2 (PV inverter PWL) and Task 3 (battery round-trip PWL) were gated on
+Task 1 resolving positive. It did not. Per the session instructions — *"If the
+benefit is not statistically distinguishable from zero, stop and report that.
+Do not proceed to Tasks 2–3 on the assumption that more PWL is better"* —
+neither was implemented.
+
+This is worth stating plainly rather than as an omission. The heat pump has
+**15× the fuel cell's throughput** and a genuinely nonlinear COP, and it is the
+strongest candidate the hub contains. If PWL cannot buy a resolvable
+improvement there, the prior that "more PWL is better" is not supported, and
+building two more instances of it would have produced two more unmeasured
+model complications rather than evidence.
+
+
+---
+
+## Task 4 — the comparison table, and the decision rule it supports
+
+`main_month4j_pwl_device_table.m`. Four configurations × **two hydrogen
+prices** × 60 draws. "Constant efficiency" means a **1-segment fit of the same
+curve**, never a different number, so every row shares the same physics and
+differs only in how finely that physics is represented. Realized cost is
+corrected to the true continuous curves in every row, on **both** the
+electrical and the thermal side.
+
+### Why the thermal correction is not cosmetic
+
+`realtime_balance` already re-prices the fuel cell's *electricity* honestly.
+Nothing re-priced **heat**. The heat balance is an equality settled at the
+day-ahead and intraday levels with no real-time heat corrector, so a planner
+whose thermal curve over-promises simply schedules less fuel, delivers less
+heat than it believes, and is never charged for the difference.
+
+The fuel cell's thermal curve `y(u) = (0.15u + 0.25u^1.7)·Pmax` is **convex**,
+so a 1-segment chord lies *above* it at part load: the constant-efficiency
+comparator over-promises heat, under-buys hydrogen, and looks cheaper than it
+is. An earlier version of this table omitted the correction and reported
+**every** PWL configuration as a reliable cost at today's hydrogen price. What
+it was measuring was an unpriced heat shortfall in its own comparator.
+`true_curve_cost.m` closes that, pricing the shortfall through the heat pump —
+the cheapest heat source here, and therefore the most conservative charge.
+
+### Price case 1 — H2 today ($7.33/kg), fuel cell 52 kWh/day, must-run
+
+| Configuration | Cost ($/d) | CO2 (kg) | Solve (s) | Binaries | Benefit % | 95% CI | Resolved? |
+|---|---|---|---|---|---|---|---|
+| All constant efficiency | 311.44 | 791.9 | 2.108 | 0 | — ref — | — | — |
+| + fuel cell PWL only | 313.74 | 791.3 | 2.440 | 96 | **−0.594** | [−0.711, −0.478] | **YES, but NEGATIVE** |
+| + heat pump PWL only | 311.23 | 782.3 | 2.443 | 96 | −0.234 | [−0.484, +0.016] | no |
+| All PWL | 312.76 | 782.1 | 2.818 | 192 | **−0.659** | [−0.909, −0.409] | **YES, but NEGATIVE** |
+| + PV inverter PWL | NOT RUN | | | | | | gate not passed |
+| + battery PWL | NOT RUN | | | | | | gate not passed |
+
+Per season:
+
+| Configuration | winter | shoulder | summer |
+|---|---|---|---|
+| + fuel cell PWL only | −0.752 [−0.94, −0.56] | −0.759 [−0.93, −0.59] | −0.272 [−0.48, −0.06] |
+| + heat pump PWL only | +0.014 [−0.06, +0.09] | +0.612 [+0.42, +0.80] | −1.327 [−1.73, −0.92] |
+| All PWL | −0.509 [−0.69, −0.32] | +0.219 [−0.05, +0.48] | −1.688 [−2.04, −1.33] |
+
+### Price case 2 — H2 DOE delivered target ($2.93/kg), fuel cell 1846 kWh/day, economic
+
+| Configuration | Cost ($/d) | CO2 (kg) | Solve (s) | Binaries | Benefit % | 95% CI | Resolved? |
+|---|---|---|---|---|---|---|---|
+| All constant efficiency | 286.25 | 751.3 | 2.095 | 0 | — ref — | — | — |
+| + fuel cell PWL only | 274.56 | 664.7 | 2.579 | 96 | **+2.309** | [+1.681, +2.937] | **YES** |
+| + heat pump PWL only | 283.77 | 732.8 | 2.491 | 96 | +0.331 | [−0.040, +0.701] | no |
+| All PWL | 271.69 | 655.7 | 3.462 | 192 | **+2.975** | [+2.135, +3.815] | **YES** |
+
+Per season:
+
+| Configuration | winter | shoulder | summer |
+|---|---|---|---|
+| + fuel cell PWL only | +5.518 [+5.30, +5.73] | +1.647 [+1.41, +1.88] | −0.238 [−0.53, +0.05] |
+| + heat pump PWL only | +0.809 [+0.75, +0.87] | +1.699 [+1.51, +1.88] | −1.515 [−1.89, −1.14] |
+| All PWL | +6.489 [+6.27, +6.71] | +3.688 [+3.45, +3.92] | −1.252 [−1.75, −0.75] |
+
+### Marginal contribution of each device
+
+Price case 1:
+
+| Marginal step | mean % | median | 95% CI (t) | sign+ | verdict |
+|---|---|---|---|---|---|
+| fuel cell PWL, added to all-constant | −0.594 | −0.598 | [−0.711, −0.478] | 6/60 | consistently opposite — a reliable **cost** |
+| heat pump PWL, added to fuel-cell PWL | −0.062 | +0.214 | [−0.352, +0.227] | 40/60 | direction consistent, interval spans zero |
+| heat pump PWL, added to all-constant | −0.234 | +0.013 | [−0.484, +0.016] | 30/60 | not distinguishable |
+| fuel cell PWL, added to heat-pump PWL | −0.426 | −0.370 | [−0.534, −0.317] | 6/60 | consistently opposite — a reliable **cost** |
+
+Price case 2:
+
+| Marginal step | mean % | median | 95% CI (t) | sign+ | verdict |
+|---|---|---|---|---|---|
+| fuel cell PWL, added to all-constant | +2.309 | +1.534 | [+1.681, +2.937] | 48/60 | distinguishable |
+| heat pump PWL, added to fuel-cell PWL | +0.637 | +0.933 | [+0.293, +0.981] | 42/60 | distinguishable |
+| heat pump PWL, added to all-constant | +0.331 | +0.852 | [−0.040, +0.701] | 40/60 | direction consistent, interval spans zero |
+| fuel cell PWL, added to heat-pump PWL | +2.619 | +1.924 | [+2.033, +3.204] | 52/60 | distinguishable |
+
+The heat pump's marginal contribution **changes sign with the price regime**
+and resolves in only one of four places (+0.637% when added on top of fuel-cell
+PWL at the target price). That is the same verdict the gate reached, reproduced
+on a different comparison.
+
+### The decision rule — and what this data does not establish
+
+Ranked by throughput × curvature, lowest first:
+
+| cell | thru × curv | benefit % | resolved? |
+|---|---|---|---|
+| FC @today | 55 | −0.594 | yes |
+| HP @target | 109 | +0.331 | no (spans zero) |
+| HP @today | 166 | −0.234 | no (spans zero) |
+| FC @target | 1961 | +2.309 | yes |
+
+**Monotone in benefit across all four cells? NO.** An earlier draft of this
+file claimed the product ordered the cases correctly; the corrected numbers say
+otherwise, and the ranking is printed so the failure is visible rather than
+asserted away. The heat pump's two cells run the wrong way round each other —
+its product **falls** 166 → 109 while its benefit **rises** −0.234% → +0.331%.
+
+The honest reading is narrower. **Only two of the four cells resolve**, and
+both are the fuel cell's: the lowest product gives a resolved negative and the
+highest a resolved positive, with both heat-pump cells unresolved in between.
+That is *consistent* with the product mattering, and it is two points — far too
+thin to call an ordering law. The non-monotonicity sits entirely inside the
+unresolved pair, so it does not refute the hypothesis either. **It is not
+settled by this data**, and reporting it as settled would be exactly the error
+this session exists to avoid.
+
+Two things the data *does* settle:
+
+1. **Throughput is not a property of a device.** The heat pump moves *less*
+   energy when hydrogen gets *cheaper* — 433 → 286 kWh/day — because at
+   $2.93/kg the fuel cell runs hard and its waste heat covers demand the pump
+   would otherwise serve. Two devices, one heat load; throughput is set by the
+   price regime. That alone disqualifies throughput as a design-time screening
+   rule, independently of any confounding.
+2. **The same device, same curve, same segment count and same binaries shows a
+   resolved positive or a resolved negative PWL benefit depending only on the
+   price regime it is dispatched under.** So "we applied PWL" is not by itself a
+   statement about anything — which is the claim this session set out to test.
+
+What point 2 **cannot** do is separate throughput from dispatch freedom. The
+fuel cell's two rows differ only in hydrogen price, and that single change
+raises throughput 36× *and* flips the device from must-run to economically
+dispatched. **Perfectly confounded, and no experiment in this session separates
+them.** Separating them would need a run that raises throughput while keeping
+the device must-run — a larger winter heat deficit at today's price would do
+it. That is recorded here as the missing experiment rather than papered over.
+
+**The four conditions, all necessary:**
+
+1. **Throughput × curvature.** A *screen, not a score* — necessary, but shown
+   above not to rank the cells monotonically.
+2. **Scheduling freedom.** The optimizer must be able to *choose* the operating
+   point. Stated as a condition, **not** as a proven one: this data cannot
+   separate it from condition 1.
+3. **Operating range.** The device must move across several segments. One
+   parked inside a single segment gets nothing from the other four, and if that
+   segment is the coarsest part of the fit it is actively worse off.
+4. **Error direction.** The fit must err *pessimistically* where the device
+   operates — the same asymmetry Month 4a established for the fuel cell,
+   reappearing on a second device, which is what makes it a mechanism rather
+   than a coincidence.
+
+Conditions 3 and 4 are about **breakpoint placement, not segment count**.
+
+### Reconciling with Month 4e
+
+Month 4e measured the fuel cell's PWL benefit at **+1.42%** on the
+delivered-target price; this table gives **+2.309%** for the same comparison.
+The difference is the **thermal correction** described above, which Month 4e
+did not apply — its constant-efficiency comparator over-promised heat and was
+not charged for it. Both numbers are positive and resolved; this one is the
+more complete accounting.
+
+### What the table does not settle
+
+It measures **cost**, under one tariff structure, on three representative days,
+at one hub size. It says nothing about whether PWL is needed for
+**feasibility** — and that argument is independent and stronger, measured for
+both devices above.
