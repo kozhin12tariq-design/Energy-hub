@@ -2483,3 +2483,84 @@ passed** — held under both the defective and the corrected convention, which i
 why the decision to skip Tasks 2 and 3 stands. In fact it stands *more* firmly
 after the fix: the defective numbers were the ones that made a rescue look
 available.
+
+---
+
+# Segment count 5 → 10: the headline PWL claim no longer resolves
+
+Commit `bd2605f` moved the default PWL segment count from 5 to 10 for both
+devices, justified by the realized-cost gap converging at n = 10 (−0.02%,
+against −0.12% at n = 5). This section is the re-measurement that commit
+promised.
+
+## The most important thing this change did
+
+**The headline claim "PWL beats constant efficiency" lost its resolved
+status.** It is now mean-nonzero but outlier-driven — the sign test does not
+reject.
+
+| | n = 5 | n = 10 |
+|---|---|---|
+| Pooled mean | +1.42% | **+0.87%** |
+| 95% CI (t) | [+1.00, +1.84] | [+0.38, +1.36] |
+| 95% CI (bootstrap) | [+1.01, +1.84] | [+0.39, +1.36] |
+| Draws in claimed direction | **44/60** | **32/60** |
+| Sign test *p* | **0.00039** | **0.7** |
+| **Verdict** | **DISTINGUISHABLE from zero** | **MEAN nonzero but OUTLIER-DRIVEN** |
+
+Both intervals still exclude zero. What collapses is the **sign test**:
+32 of 60 draws is what you would get from a coin. The mean is carried by a
+minority of draws with large positive differences rather than by a consistent
+effect, which is exactly the pattern `paired_stats.m` exists to catch and the
+same verdict the rolling-layer ablation has always carried.
+
+**This is not a technicality and it is not being presented as one.** A benefit
+that resolves at one segment count and does not resolve at another is a real
+property of the method: the measured value of PWL is **sensitive to the
+resolution of the PWL**. The thesis should say so. A number quoted at n = 5 and
+silently contradicted at n = 10 would not survive examination.
+
+## Where the effect went — per season
+
+| Season | n = 5 | n = 10 | verdict change |
+|---|---|---|---|
+| winter | +3.52% [+3.23, +3.80], 20/20 | +3.38% [+3.08, +3.67], 20/20 | none — still resolved |
+| shoulder | +0.93% [+0.69, +1.17], 19/20 | **+0.18% [−0.08, +0.44], 12/20** | **RESOLVED → NOT distinguishable** |
+| summer | −0.20% [−0.34, −0.05], 5/20 | **−0.94% [−1.11, −0.78], 0/20** | still a reliable cost, **4.7× larger** |
+
+Two seasons moved and they moved in the same direction: **against PWL**.
+Shoulder fell from a resolved +0.93% to a null, and summer's reliable cost grew
+from −0.20% to −0.94%. Winter is untouched. The pooled null is those three
+disagreeing more sharply than before, not an absence of effect.
+
+## The mechanism
+
+The n = 10 fit resolves the curve's steep initial rise instead of averaging it
+away. Measured in `bd2605f`: the rise above segment 1 grows from **0.0625 to
+0.0749** on the fuel cell and from **0.32 to 1.80** on the heat pump. A finer
+grid makes the model *more* accurate and its non-concavity *sharper*.
+
+That cuts both ways, and here it cuts against the cost result:
+
+1. **Where the fuel cell does not run, nothing changes.** At the shipped
+   hydrogen price the day-ahead cost is **bit-identical** at n = 5 and n = 10 in
+   shoulder (200.796066487) and summer, because the fuel cell never starts. The
+   segment count cannot matter where the device is off.
+2. **Where it runs, the finer model plans better and realizes worse.** Month 4a
+   Case 5: planned cost 161.8294 → 161.5391 (closer to truth), Optimism +0.0060
+   → +0.0019 (better calibrated), realized cost 178.3350 → **179.6020**, gap
+   10.20% → **11.18%**.
+
+So the comparator moved. Constant efficiency is a fixed reference; what changed
+is that the PWL arm's *own* realized cost rose. A better-calibrated plan is less
+optimistic, commits less fuel-cell output, and buys less of the cheap
+electricity that produced the margin at n = 5 — while the real-time layer, which
+re-prices the fuel cell against the true continuous curve regardless of what the
+planner believed, gives back nothing for the improved planning accuracy.
+
+**This is the same lesson v10 established on the heat pump, reappearing on the
+fuel cell by a different route: a fit closer to the true curve does not
+automatically buy a cheaper dispatch.** Month 4c already documents the general
+form of it — `Gap(%)` is not a measure of model quality — and this is now the
+second independent confirmation.
+
