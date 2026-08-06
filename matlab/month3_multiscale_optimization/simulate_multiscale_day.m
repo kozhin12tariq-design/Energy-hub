@@ -134,6 +134,10 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
     % 15-minute commitment repeated -- recorded because the PWL device sweep
     % re-evaluates it against the true continuous COP curve.
     Php5 = zeros(288,1);
+    % RECORDING ONLY -- no dispatch reads these back. Ps5 is the PV DC power
+    % actually used (curtailment already applied), needed by hub_efficiency.m
+    % to close an energy balance. Nothing here changes what is solved.
+    Ps5 = zeros(288,1);
     ID_SOC = struct('Batt',zeros(96,1),'EV',zeros(96,1),'Building',zeros(96,1),'Pipe',zeros(96,1));
     ID_Pg_imp = zeros(96,1); ID_Pg_exp = zeros(96,1); ID_PH2 = zeros(96,1);
     RT_imbalance = zeros(288,1);
@@ -185,6 +189,7 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
             [actual, SOCbatt5loop, infoRT] = realtime_balance(pTrue, SOCbatt5loop, committed, ...
                 fc.RT.solar(m), fc.RT.Lelec(m), priceImport5, priceExport5);
             Pg_imp5(m) = actual.Pg_imp; Pg_exp5(m) = actual.Pg_exp; PH2_5(m) = actual.PH2;
+            Ps5(m) = actual.Ps;
             if isfield(actual,'Qh'); Q5(m) = actual.Qh; end
             SOCbatt5(m) = SOCbatt5loop;
             RT_imbalance(m) = infoRT.imbalanceCorrected_kW;
@@ -198,9 +203,14 @@ function res = simulate_closed_loop(p, pTrue, fc, DA)
 
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
     res.Php5 = Php5;
+    res.Ps5 = Ps5;                   % PV DC actually used, after curtailment
     res.Q5 = Q5;                     % 5-min reactive dispatch actually executed
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;
+    res.SOC0   = struct('Batt', p.Batt.SOC0, 'EV', p.EV.SOC0, ...
+                        'Building', p.Building.SOC0, 'Pipe', p.Pipe.SOC0);
+    res.SOCend = struct('Batt', SOCstate.Batt, 'EV', SOCstate.EV, ...
+                        'Building', SOCstate.Building, 'Pipe', SOCstate.Pipe);
     res.ID_Pg_imp = ID_Pg_imp; res.ID_Pg_exp = ID_Pg_exp; res.ID_PH2 = ID_PH2;
     res.RT_imbalance = RT_imbalance;
     res.mode = 'closed_loop';
@@ -209,6 +219,10 @@ end
 function res = simulate_open_loop(p, fc, DA, hourOf5)
     Pg_imp5 = zeros(288,1); Pg_exp5 = zeros(288,1); PH2_5 = zeros(288,1);
     Php5 = zeros(288,1);
+    % RECORDING ONLY -- no dispatch reads these back. Ps5 is the PV DC power
+    % actually used (curtailment already applied), needed by hub_efficiency.m
+    % to close an energy balance. Nothing here changes what is solved.
+    Ps5 = zeros(288,1);
     SOCbatt5 = zeros(288,1); Q5 = zeros(288,1);
     ID_SOC = struct('Batt',zeros(96,1),'EV',zeros(96,1),'Building',zeros(96,1),'Pipe',zeros(96,1));
 
@@ -218,6 +232,7 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
     for m = 1:288
         h = hourOf5(m);
         Ps_m = min(DA.Ps(h), fc.RT.solar(m));
+        Ps5(m) = Ps_m;
         PH2_5(m) = DA.PH2(h);
         if isfield(DA,'Qh'); Q5(m) = DA.Qh(h); end
 
@@ -249,9 +264,14 @@ function res = simulate_open_loop(p, fc, DA, hourOf5)
 
     res.Pg_imp5 = Pg_imp5; res.Pg_exp5 = Pg_exp5; res.PH2_5 = PH2_5;
     res.Php5 = Php5;
+    res.Ps5 = Ps5;                   % PV DC actually used, after curtailment
     res.Q5 = Q5;
     res.SOCbatt5 = SOCbatt5;
     res.ID_SOC = ID_SOC;
+    res.SOC0   = struct('Batt', p.Batt.SOC0, 'EV', p.EV.SOC0, ...
+                        'Building', p.Building.SOC0, 'Pipe', p.Pipe.SOC0);
+    res.SOCend = struct('Batt', SOC.Batt, 'EV', SOC.EV, ...
+                        'Building', SOC.Building, 'Pipe', SOC.Pipe);
     res.ID_Pg_imp = DA.Pg_imp(hourOf5(3:3:288)); res.ID_Pg_exp = DA.Pg_exp(hourOf5(3:3:288)); % day-ahead value held fixed, no separate intraday plan exists
     res.ID_PH2 = DA.PH2(hourOf5(3:3:288));
     res.RT_imbalance = zeros(288,1); % no correction layer exists in open loop

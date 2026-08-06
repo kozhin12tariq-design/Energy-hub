@@ -326,6 +326,35 @@ makes the *cost* case fail. A model that reports impossible dispatches is
 wrong irrespective of what the error is worth on a given day, so the heat
 pump needs those binaries the moment its curve is modelled at all.
 
+## Assessment covers all four thesis criteria
+
+The brief requires assessment on **operational cost, carbon reduction, system
+resilience and efficiency**. All four are now reported. `hub_efficiency.m`
+computes whole-hub energy efficiency from completed dispatches and it appears
+in the Month 4a case table and the Month 3 seasonal table.
+
+**Two ratios are reported because neither alone is honest.** Purchased-energy
+efficiency can exceed 100% — a heat pump at COP 3.2 delivers heat it never
+bought, lifted from ambient air. First-law efficiency charges the hub for that
+ambient heat and is bounded by 100%.
+
+| Case | η purchased (%) | η first-law (%) |
+|---|---|---|
+| 1: Conventional | 95.7 | **95.7** |
+| 4: Full proposed | **121.1** | 92.3 |
+
+**The conventional case is more efficient on first law, and that is reported
+rather than buried.** The hub interposes a PV inverter, a fuel cell, and four
+storage devices — the largest single loss being 178 kWh/day of storage
+self-discharge, mostly building thermal mass leaking at 15%/hour. **The hub buys
+its cost and carbon reductions with thermodynamic efficiency.**
+
+Seasonally, efficiency peaks at the **shoulder** (121.1%), not winter (119.0%),
+even though winter is when the fuel cell's byproduct heat is fully used. The
+fuel cell recovers ~75% of its hydrogen across both outputs; the heat pump
+returns ~320% against purchased electricity. Any hour the fuel cell displaces
+the heat pump lowers the average.
+
 ## Segment count: n = 10, and what it cost
 
 The default PWL segment count is **10**, selected where the realized-cost gap

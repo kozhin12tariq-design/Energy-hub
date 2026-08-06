@@ -2610,3 +2610,117 @@ record: **n = 10 costs memory as well as time, and the margin on a 16 GB machine
 is now thin.** A study that quotes only the +0.089 s figure would leave a reader
 unprepared for a job that dies at 8.6 GB.
 
+
+---
+
+# Efficiency: the fourth assessment criterion, and the conventional case wins it
+
+The thesis brief requires assessment on cost, carbon, resilience **and
+efficiency**. The first three were reported; efficiency was computed nowhere.
+`hub_efficiency.m` closes that. It computes only — it reads completed
+dispatches and forms ratios, solves nothing, and **every pre-existing number is
+bit-identical** (verified by `git stash` diff on closed- and open-loop cost,
+CO2 and peak across all three seasons).
+
+## The headline: two efficiency numbers disagree about who wins, and both are right
+
+| Case | Cost($) | CO2(kg) | η_hub purchased (%) | η first-law (%) |
+|---|---|---|---|---|
+| 1: Conventional | 823.08 | 1708.5 | 95.7 | **95.7** |
+| 2: Day-ahead only | 236.19 | 732.7 | 122.2 | 92.2 |
+| 3: No robust reserve | 236.24 | 691.1 | 121.0 | 92.3 |
+| 4: Full proposed | 230.80 | 691.4 | **121.1** | 92.3 |
+
+**On purchased energy the hub wins by a wide margin (121.1% vs 95.7%). On
+first-law energy the conventional case is more efficient (95.7% vs 92.3%), and
+that is reported plainly rather than buried.**
+
+Above 100% is not an error. A heat pump does not create heat, it *moves* it: at
+COP 3.2 it delivers heat it never bought, lifted from ambient air. A
+purchased-energy ratio must therefore be allowed to exceed 100%, or it would
+require pretending the ambient source does not exist. `etaHubThermo` charges the
+hub for that ambient heat and is first-law bounded.
+
+**The mechanism is conversion count.** The conventional case has two short
+paths: grid electricity straight to load, and gas through one boiler at 90%.
+The hub interposes a PV inverter, a fuel cell, four storage devices with
+round-trip losses, and — the largest single term — **storage self-discharge of
+178 kWh/day**, most of it the building thermal mass leaking at 15%/hour. Every
+extra conversion costs first-law efficiency. **The hub buys its cost and carbon
+reductions with thermodynamic efficiency**, and that trade is invisible unless
+both numbers are printed.
+
+This sits beside the existing result that the conventional case has the best
+minimum voltage, and it is legitimate for the same reason: a hub that does more
+things has more places to lose energy.
+
+## The expected seasonal mechanism was wrong
+
+The prior was that efficiency should peak in winter, where the codebase has
+already established the fuel cell is **must-run for heat** and its byproduct
+heat is fully used. Measured:
+
+| | winter | shoulder | summer |
+|---|---|---|---|
+| η_hub, purchased (%) | 119.0 | **121.1** | 99.0 |
+| η_hub, first-law (%) | 90.5 | 92.3 | 90.1 |
+| Renewable fraction (%) | 5.6 | 41.2 | 61.2 |
+| Feeder efficiency (%) | 95.1 | 95.2 | 95.2 |
+| Fuel-cell fuel (kWh) | 1556.3 | 49.5 | 0.0 |
+
+**Winter is not the peak — the shoulder is**, and the shoulder runs the fuel
+cell for 49.5 kWh of fuel against winter's 1556.3.
+
+**The fuel cell dilutes the average even when its heat is fully used.** Its two
+outputs together recover roughly 75% of the hydrogen (~45% electrical + ~30%
+thermal on these curves). The heat pump delivers heat at COP 3.2, i.e. ~320%
+against purchased electricity. **Any hour the fuel cell displaces the heat pump
+lowers the hub average**, byproduct heat notwithstanding — and winter is exactly
+when the heat pump saturates and the fuel cell takes over. Byproduct heat makes
+the fuel cell far better than a *boiler*; it does not make it better than the
+*heat pump* it is displacing.
+
+Summer is lowest (99.0%) for the opposite reason: heat demand is a small
+hot-water baseline, so the heat pump — the only device that returns more energy
+than it consumes — barely runs, and the hub reduces to PV plus grid.
+
+## PWL changes the plan, not the realized efficiency
+
+Cases 2, 3 and 4 span 121.0–122.2% purchased and 92.2–92.3% first-law. The
+control-layer differences that move cost by several percent move **first-law
+efficiency by 0.1 percentage points**. This is consistent with the standing
+finding that better curve fitting does not automatically buy a better dispatch:
+the layers change *when* energy flows, not how efficiently it converts.
+
+## Definition, boundary, and the balance check
+
+- **PV** counted as **DC before the inverter**, post-curtailment only. Counting
+  it as AC would move the inverter's losses outside the boundary and flatter the
+  hub by construction. Curtailed sunlight is not an input.
+- **Hydrogen and gas** counted as chemical energy input.
+- **Storage** is not ignored: the four stores do not return to their starting
+  SOC, so the **net energy released** (E_start − E_end) is an explicit signed
+  input term. The battery alone drains 40% of a 466 kWh capacity.
+- **Grid export** is useful output, not negative input. `etaHubNet` reports the
+  netting convention alongside, labelled rather than blended.
+- **Physics uses the true continuous curves**, not the planner's PWL fit.
+
+**Balance residual**, computed as boundary-closure losses minus losses summed
+device by device (two genuinely different routes):
+
+| | winter | shoulder | summer | Case 1 |
+|---|---|---|---|---|
+| Residual (kWh/day) | −68.99 | −23.72 | −2.04 | **0.000** |
+| As % of input | 1.1% | 0.5% | 0.06% | 0.0% |
+
+The conventional case closes **exactly**, which is the strongest check
+available: it has no storage, no PV and no heat pump, so every term is
+independently known. The hub cases close to ~1% or better, the residual coming
+from storage trajectory sampling at 15 minutes against 5-minute flows.
+
+**One error found and fixed during construction.** The first version added a
+separate "dumped heat" term to the balance, which **double-counted**: the
+thermal stores drain 231 kWh/day, and nearly all of it is self-discharge leakage
+already charged in the self-discharge term. The balance closes on the four loss
+terms alone. The thermal-node surplus is retained as a labelled diagnostic, not
+as a balance term.

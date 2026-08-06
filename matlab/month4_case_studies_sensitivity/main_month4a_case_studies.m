@@ -138,6 +138,21 @@ V2c4 = reliability_check(C2.Pg_imp5, C2.Pg_exp5, feederCapC4);
 V3c4 = reliability_check(C3.Pg_imp5, C3.Pg_exp5, feederCapC4);
 V4c4 = reliability_check(C4.Pg_imp5, C4.Pg_exp5, feederCapC4);
 
+% EFFICIENCY, the fourth assessment criterion in the thesis brief. Computed
+% from the completed dispatches -- nothing is re-solved. hub_efficiency.m
+% documents the boundary; the two ratios answer different questions and are
+% both reported because neither alone is honest:
+%   etaHub       = delivered / PURCHASED energy. Can exceed 100% because the
+%                  heat pump lifts ambient heat nobody paid for.
+%   etaHubThermo = delivered / (purchased + ambient lifted). First-law
+%                  bounded, and the one on which the CONVENTIONAL case wins.
+E1 = hub_efficiency(p, fc, C1); E2 = hub_efficiency(p, fc, C2);
+E3 = hub_efficiency(p, fc, C3); E4 = hub_efficiency(p, fc, C4);
+etaHubPct    = 100*[E1.etaHub, E2.etaHub, E3.etaHub, E4.etaHub];
+etaThermoPct = 100*[E1.etaHubThermo, E2.etaHubThermo, E3.etaHubThermo, E4.etaHubThermo];
+effResid     = [E1.balanceResidual_kWh, E2.balanceResidual_kWh, ...
+                E3.balanceResidual_kWh, E4.balanceResidual_kWh];
+
 cases = {'1: Conventional', '2: Day-ahead only', '3: No robust reserve', '4: Full proposed'};
 cost = [C1.actualCost, C2.actualCost, C3.actualCost, C4.actualCost];
 emis = [C1.emissions_kgCO2, C2.emissions_kgCO2, C3.emissions_kgCO2, C4.emissions_kgCO2];
@@ -145,14 +160,31 @@ peak = [C1.dayaheadPeakImport, max(C2.Pg_imp5), max(C3.Pg_imp5), max(C4.Pg_imp5)
 unmetE = [NaN, V2.unmetEnergy_kWh, V3.unmetEnergy_kWh, V4.unmetEnergy_kWh];
 violHrs = [NaN, V2.violationHours, V3.violationHours, V4.violationHours];
 
-fprintf('\n%-24s %10s %12s %10s %14s %12s\n', 'Case', 'Cost($)', 'CO2(kg)', 'Peak(kW)', 'UnmetE(kWh)', 'ViolHrs');
+fprintf('\n%-24s %10s %12s %10s %14s %12s %11s %11s\n', 'Case', 'Cost($)', 'CO2(kg)', 'Peak(kW)', 'UnmetE(kWh)', 'ViolHrs', 'etaHub(%)', 'etaTherm(%)');
 for i = 1:4
     if isnan(unmetE(i))
-        fprintf('%-24s %10.2f %12.1f %10.1f %14s %12s\n', cases{i}, cost(i), emis(i), peak(i), 'n/a', 'n/a');
+        fprintf('%-24s %10.2f %12.1f %10.1f %14s %12s %11.1f %11.1f\n', cases{i}, cost(i), emis(i), peak(i), 'n/a', 'n/a', etaHubPct(i), etaThermoPct(i));
     else
-        fprintf('%-24s %10.2f %12.1f %10.1f %14.2f %12.2f\n', cases{i}, cost(i), emis(i), peak(i), unmetE(i), violHrs(i));
+        fprintf('%-24s %10.2f %12.1f %10.1f %14.2f %12.2f %11.1f %11.1f\n', cases{i}, cost(i), emis(i), peak(i), unmetE(i), violHrs(i), etaHubPct(i), etaThermoPct(i));
     end
 end
+fprintf('Energy-balance residual per case (kWh/day): %+.3f %+.3f %+.3f %+.3f\n', effResid);
+fprintf(['\nTHE TWO EFFICIENCY COLUMNS DISAGREE ABOUT WHO WINS, AND BOTH ARE RIGHT.\n' ...
+    'On PURCHASED energy the hub is far ahead (%.1f%% against the conventional\n' ...
+    'case''s %.1f%%) because its heat pump delivers heat it never bought -- lifted\n' ...
+    'from ambient air at a COP of %.1f. On FIRST-LAW energy, which charges the hub\n' ...
+    'for that ambient heat, the CONVENTIONAL CASE IS MORE EFFICIENT: %.1f%% against\n' ...
+    '%.1f%%. That is not a defect in the hub and it is not softened here.\n' ...
+    '\nTHE MECHANISM IS CONVERSION COUNT. The conventional case has two paths and\n' ...
+    'both are short: grid electricity straight to load, and gas through one boiler\n' ...
+    'at %.0f%%. The hub interposes a PV inverter, a fuel cell, four storage devices\n' ...
+    'with round-trip losses, and -- the largest single term -- storage SELF-DISCHARGE\n' ...
+    'of %.0f kWh/day, most of it the building thermal mass leaking at %.0f%%/hour.\n' ...
+    'Every extra conversion costs first-law efficiency. The hub buys cost and carbon\n' ...
+    'reductions with thermodynamic efficiency, and the trade is only visible if both\n' ...
+    'numbers are printed.\n'], ...
+    etaHubPct(4), etaHubPct(1), p.HeatPump.COP, etaThermoPct(1), etaThermoPct(4), ...
+    100*p.Boiler.eta, E4.lossSelfDischarge_kWh, 100*p.Building.selfLoss);
 
 %% Reliability under both threshold bases -----------------------------
 fprintf('\n--- Reliability under BOTH capacity bases (cost/CO2/peak unaffected) ---\n');
