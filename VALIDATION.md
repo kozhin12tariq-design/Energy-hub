@@ -2824,3 +2824,91 @@ several times smaller at the same insulation standard.
 challenge was legitimate and specific, it was tested against the model's own
 numbers rather than deflected, and the parameter came out very close to where it
 started for a reason that can now be checked by a reader.
+
+---
+
+# Chunked Monte Carlo execution: a toolchain limit, fixed exactly
+
+The three Monte Carlo scripts could not complete at `nSegments = 10`. The cause
+is a **memory leak in `glpk`'s integer solve**, not a modelling defect, and the
+fix changes **how** the draws are executed, never **what** is computed.
+
+## The leak, measured
+
+| Test | Result |
+|---|---|
+| `dayahead_dispatch` × 60 | 52 MB, **flat — no leak** |
+| `intraday_dispatch` × 200 | 65 → 112 MB, ~0.31 MB/call, linear |
+| `simulate_multiscale_day` × 5 | 99 → 145 → 192 → 239 → **285 MB**, **~46.5 MB/day-sim, linear** |
+
+Reproduced independently here, with `clear` between every call — the growth is
+identical. The memory is held **at the C level, outside Octave's variable
+space**, so `clear` cannot reach it and **only process exit releases it**.
+
+**The failure scales with day-sim count, not problem difficulty.** `main_month4a`
+runs 12 day-sims (~0.6 GB) and is fine; `main_month4e` runs 60 draws × 5
+configurations = **300 day-sims ≈ 14 GB** and is not. This was survivable at
+`nSegments = 5` (96 binaries/device/day) and is not at 10 (216).
+
+## Why chunking is exact, not an approximation
+
+The draws are independent and `forecast_profiles(seed, ...)` is seeded **per
+draw**, so draw *i* is bit-identical regardless of which process computes it.
+Partitioning is done over the **draw index** — the full ordered (season × seed)
+list is built first, then sliced — so the union of chunks is exactly the
+original 60-draw set in the original order.
+
+Chunk files carry **raw per-draw differences only, never partial statistics**:
+means and confidence intervals do not combine, so storing them would invite
+someone to average them later and get a wrong answer. `paired_stats` runs once,
+in `mc_aggregate`, on all draws at once.
+
+The statistics block was **extracted verbatim** into `mc_report_month4e.m` and is
+called by both paths, so identical output is guaranteed **by construction**
+rather than by two implementations happening to agree.
+
+## The acceptance test — passed
+
+6 draws (2 seeds × 3 seasons), single process vs 3 chunks of 2, aggregated:
+
+```
+*** IDENTICAL -- byte-for-byte across the entire report ***
+```
+
+| Claim | mean | median | sd | 95% CI (t) | sign+ | p |
+|---|---|---|---|---|---|---|
+| PWL vs constant efficiency | 0.71 | 0.01 | 1.79 | [−1.16, +2.59] | 3/6 | 1 |
+| Rolling layers | 0.66 | −1.59 | 6.18 | [−5.82, +7.15] | 2/6 | 0.69 |
+| Robust reserve | 1.06 | 1.21 | 1.51 | [−0.52, +2.65] | 4/6 | 0.69 |
+
+Every printed statistic matches to full precision, and the per-draw vectors
+match element-by-element (a `diff` over the whole report section is empty).
+
+## Completeness is enforced, and the guard was tested
+
+Deleting one chunk and re-aggregating:
+
+```
+error: Chunk set is NOT complete -- refusing to report statistics.
+  expected 6 draws, found 4 unique-or-not
+  missing draw indices: [3 4]
+  duplicated draw indices: []
+```
+
+A silently short Monte Carlo would understate every confidence interval in the
+thesis, so this is an **error, not a warning**.
+
+## One defect found and fixed during implementation
+
+The script begins `clear; clc;`, which **silently wiped the chunk selectors** —
+so every chunk ran the *full* draw set and printed statistics. That would have
+looked like success while doing the exact opposite of chunking, and the
+aggregator would then have seen 3 duplicate copies of all 6 draws. It is now
+`clear -x MC_CHUNK MC_NCHUNK`, and the completeness check would have caught the
+duplication regardless.
+
+## Chunk-size budget rule
+
+**~46.5 MB × (draws per chunk) × (configs per draw).** For `main_month4e` at 5
+draws/chunk × 5 configs = 25 day-sims ≈ **1.2 GB**. 60 draws → 12 chunks.
+`main_month4j` runs more configurations per draw and needs a smaller chunk.

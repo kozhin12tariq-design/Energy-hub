@@ -326,6 +326,33 @@ makes the *cost* case fail. A model that reports impossible dispatches is
 wrong irrespective of what the error is worth on a given day, so the heat
 pump needs those binaries the moment its curve is modelled at all.
 
+## Running the Monte Carlo scripts (chunked)
+
+`glpk` leaks ~46.5 MB per full-day simulation at `nSegments = 10` and Octave
+never releases it (`clear` does not help — the memory is held at the C level).
+`main_month4e/i/j` run 300+ day-sims, i.e. ~14 GB in one process, so they are
+run in **chunks across separate processes**. **Chunking is exact**: draws are
+independent and seeded per draw index, and the chunked output is byte-for-byte
+identical to single-process (see VALIDATION.md).
+
+```bash
+cd matlab/month4_case_studies_sensitivity
+./run_chunked.sh month4e 12          # 12 chunks of 5 draws, then aggregate
+```
+
+Windows / no bash — the same thing manually:
+
+```
+cd matlab\month4_case_studies_sensitivity
+octave --no-gui --eval "MC_CHUNK=0; MC_NCHUNK=12; main_month4e_monte_carlo"
+octave --no-gui --eval "MC_CHUNK=1; MC_NCHUNK=12; main_month4e_monte_carlo"
+...                                  (chunks 0..11, one process each)
+octave --no-gui --eval "mc_aggregate('month4e')"
+```
+
+Run without `MC_CHUNK` for the original single-process behaviour, which is
+unchanged. Size chunks by **~46.5 MB × draws/chunk × configs/draw**.
+
 ## Assessment covers all four thesis criteria
 
 The brief requires assessment on **operational cost, carbon reduction, system
