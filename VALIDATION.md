@@ -2724,3 +2724,103 @@ thermal stores drain 231 kWh/day, and nearly all of it is self-discharge leakage
 already charged in the self-discharge term. The balance closes on the four loss
 terms alone. The thermal-node surplus is retained as a labelled diagnostic, not
 as a balance term.
+
+---
+
+# Building thermal self-discharge: derived, and the premise for changing it was wrong
+
+`p.Building.selfLoss` was `0.15`/h, uncited. It is now **0.1426**/h, derived
+from the model's own energy balance. **The value barely moved, and the reason
+matters more than the change.**
+
+## What the state variable is
+
+Building SOC is the thermal energy stored in the fabric **relative to the lower
+comfort bound**. `selfLoss` is the passive decay of that stored excess back
+toward the bound, governed by τ = C_th/UA. Without that definition
+"self-discharge" for a building is ambiguous and uncheckable.
+
+## The derivation
+
+| Quantity | Value |
+|---|---|
+| C_th = Emax / band = 140.0 / 2 °C | 70.00 kWh/°C |
+| Winter peak heat demand | 237.59 kW |
+| less DHW baseline (summer heat, no space heating) | 27.52 kW |
+| **Fabric loss** | **210.07 kW** |
+| at ΔT = 20 °C room − 0.5 °C winter ambient | 19.5 °C |
+| **UA** = 210.07 / 19.5 | **10.77 kW/°C** |
+| **τ** = C_th / UA | **6.50 h** |
+| **selfLoss** = 1 − exp(−1/τ) | **0.1426**/h |
+
+## The claimed inconsistency does not exist
+
+The brief argued the building "leaks at roughly twice the rate its own heat
+demand implies", from a winter peak heat demand of ~136 kW giving τ ≈ 13 h.
+**The model's actual winter peak heat demand is 237.59 kW.** With the correct
+figure, τ = 6.50 h — against the old value's effective 6.54 h under the discrete
+`(1 − selfLoss·Δt)` update. **They agree to 0.6%.**
+
+The old value was *uncited*, not *wrong*. It is replaced so the number is
+traceable, not because it was in error.
+
+## The real problem is a different parameter, and it is out of scope
+
+τ ≈ 6.5 h remains far below ISO 13790 / EN ISO 52016, which give ~20–30 h for
+even **very light** construction. But reaching τ = 20 h at this C_th requires
+UA = 3.50 kW/°C — a fabric peak of **68.2 kW against the 210.1 kW this model's
+own heat profile demands, a factor of 3.1**.
+
+So the pair (C_th, UA) describes a building with **far too little thermal mass
+for its heat loss**. The mis-specified quantity is **C_th** — `Emax` = 30 kWh
+per hub-unit, i.e. 15 kWh/°C — not `selfLoss`. Forcing `selfLoss` to a
+literature τ while leaving `Emax` alone would **replace a self-consistent
+parameter set with an inconsistent one**: the building would leak more slowly
+than its own heat demand says it can. `Emax` is outside this change's scope and
+is flagged here as what a future revision should address.
+
+## The pipe: reviewed, retained, and the ordering explained
+
+`p.Pipe.selfLoss = 0.04` (τ ≈ 24.9 h) remains **uncited and is labelled as
+assumed** — a network heat-loss figure for a matching pipe diameter, burial
+depth and soil conductivity was not reachable from this environment. It is left
+unchanged because no sourced basis was found to change it *to*.
+
+The building leaking ~4× faster than the pipe network is **not** an error: it is
+ΔT. The fabric sits against outdoor air at ΔT ≈ 19.5 °C in winter; buried
+district-heating pipes sit in soil far warmer than the air above it, so their
+driving temperature difference — and therefore their fractional decay rate — is
+several times smaller at the same insulation standard.
+
+## Before/after — everything that depends on it
+
+| Quantity | selfLoss 0.15 | selfLoss 0.1426 | moved? |
+|---|---|---|---|
+| Winter realized cost | 843.36 | 842.29 | −0.13% |
+| Shoulder realized cost | 230.80 | 230.72 | −0.03% |
+| Summer realized cost | 51.00 | 50.96 | −0.08% |
+| Case 4 cost / CO2 / peak | 230.80 / 691.4 / 484.8 | 230.72 / 691.1 / 484.8 | negligible |
+| Case 1 η purchased / first-law | 95.7 / 95.7 | 95.7 / 95.7 | **unchanged** |
+| Case 4 η purchased / first-law | 121.1 / 92.3 | 121.1 / 92.3 | **unchanged** |
+| Building cycling, shoulder | 1.24 kWh/day | **1.16 kWh/day** | still marginal |
+| Building cycling, winter | — | 55.40 kWh/day | — |
+| Pipe cycling, shoulder | 337.76 | 337.70 | unchanged |
+| Balance residual, winter | −68.99 | −69.20 | closes |
+
+## The three dependent findings all survive
+
+1. **"The conventional case wins on first-law efficiency"** — unchanged at
+   **95.7% vs 92.3%**. Self-discharge remains the largest single first-law loss.
+2. **The displacement finding survives, in a stronger form.** The building still
+   cycles **1.16 kWh/day** at the shoulder against the pipe's 337.70. It was
+   fair to ask whether that was an artifact of an unjustified decay rate; it is
+   not, because the rate is now derived from the model's own heat balance and
+   the result barely moved.
+3. **The winter counterfactual** is unaffected in kind — the building cycles
+   55.40 kWh/day in winter under normal dispatch, so the capability is real and
+   displaced rather than absent.
+
+**No claim is withdrawn this time.** That is itself worth recording: the
+challenge was legitimate and specific, it was tested against the model's own
+numbers rather than deflected, and the parameter came out very close to where it
+started for a reason that can now be checked by a reader.

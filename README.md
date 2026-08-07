@@ -345,8 +345,8 @@ ambient heat and is bounded by 100%.
 
 **The conventional case is more efficient on first law, and that is reported
 rather than buried.** The hub interposes a PV inverter, a fuel cell, and four
-storage devices — the largest single loss being 178 kWh/day of storage
-self-discharge, mostly building thermal mass leaking at 15%/hour. **The hub buys
+storage devices — the largest single loss being ~178 kWh/day of storage
+self-discharge, mostly building thermal mass leaking at 14.3%/hour. **The hub buys
 its cost and carbon reductions with thermodynamic efficiency.**
 
 Seasonally, efficiency peaks at the **shoulder** (121.1%), not winter (119.0%),

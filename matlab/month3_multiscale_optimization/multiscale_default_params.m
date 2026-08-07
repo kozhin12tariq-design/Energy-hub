@@ -325,7 +325,42 @@ function p = multiscale_default_params(hubScale)
     p.Building.SOC0     = 0.50;
     p.Building.Pch_max  = 10.0 * k;  % kW, extra heating modulation available
     p.Building.Pdis_max = 10.0 * k;  % kW, heating reduction while coasting
-    p.Building.selfLoss = 0.15;   % per hour (~7h thermal time constant)
+    % WHAT THE STATE VARIABLE IS. Building SOC is the thermal energy stored
+    % in the fabric RELATIVE TO THE LOWER COMFORT BOUND (SOCmin = bottom of
+    % the 2 C band). selfLoss is the passive decay of that stored excess back
+    % toward the bound, governed by the building time constant tau = C_th/UA.
+    % Without that definition 'self-discharge' for a building is ambiguous
+    % and the number cannot be checked by a reader.
+    %
+    % DERIVED FROM THE MODEL'S OWN ENERGY BALANCE, not asserted:
+    %   C_th = Emax / band = 140.0 / 2 C                  = 70.00 kWh/C
+    %   winter peak heat demand                           = 237.59 kW
+    %   less DHW baseline (summer heat, no space heating) =  27.52 kW
+    %   => fabric loss                                    = 210.07 kW
+    %   at dT = 20 C room - 0.5 C winter ambient          =  19.5 C
+    %   => UA  = 210.07 / 19.5                            =  10.77 kW/C
+    %   => tau = C_th / UA                                =   6.50 h
+    %   => selfLoss = 1 - exp(-1/tau)                     =   0.1426 /h
+    %
+    % THE PREVIOUS VALUE 0.15 WAS UNCITED BUT NOT WRONG. Under the discrete
+    % (1 - selfLoss*dt) update it gives an effective tau of 6.54 h against
+    % the 6.50 h derived above -- agreement to 0.6%. It is replaced by the
+    % derived value so the number is traceable, not because it was in error.
+    %
+    % IT IS STILL FAR OUTSIDE ISO 13790, AND THAT IS A REAL PROBLEM -- BUT
+    % NOT THIS PARAMETER'S. ISO 13790 / EN ISO 52016 give tau ~20-30 h for
+    % even VERY LIGHT construction. Reaching tau = 20 h at this C_th needs
+    % UA = 3.50 kW/C, i.e. a fabric peak of 68.2 kW -- against the 210.1 kW
+    % this model's own heat profile demands, a factor of 3.1. So the pair
+    % (C_th, UA) describes a building with far too little thermal mass for
+    % its heat loss. The mis-specified quantity is C_th (Emax = 30 kWh per
+    % hub-unit, i.e. 15 kWh/C), NOT selfLoss: forcing selfLoss to a
+    % literature tau while leaving Emax alone would replace a CONSISTENT
+    % parameter set with an INCONSISTENT one, and the building would then
+    % leak more slowly than its own heat demand says it can. Emax is outside
+    % this change's scope and is flagged in VALIDATION.md as the parameter a
+    % future revision should address.
+    p.Building.selfLoss = 0.1426;  % per hour; tau = 6.50 h, derived above
 
     % Generalized storage #2: district-heating pipe/network thermal
     % storage (serves Heat_Bus) -- larger, slower, better insulated
@@ -337,7 +372,20 @@ function p = multiscale_default_params(hubScale)
     p.Pipe.SOC0     = 0.50;
     p.Pipe.Pch_max  = 20.0 * k;   % kW
     p.Pipe.Pdis_max = 20.0 * k;   % kW
-    p.Pipe.selfLoss = 0.04;   % per hour (~25h time constant, well insulated)
+    % PIPE SELF-LOSS, reviewed for the same defect and RETAINED, with the
+    % ordering now explained rather than left to look odd. tau = 24.9 h
+    % under the discrete update. The building leaking ~4x faster than the
+    % pipe network is not a modelling error: it is dT. The building fabric
+    % sits against outdoor air at dT ~ 19.5 C in winter, while buried
+    % district-heating pipes sit in soil that is far warmer than the air
+    % above it, so their driving temperature difference -- and therefore
+    % their fractional decay rate -- is several times smaller for the same
+    % insulation standard. UNCITED, and labelled as such: a specific network
+    % heat-loss figure for a matching pipe diameter, burial depth and soil
+    % conductivity was not reachable from this environment. It is left
+    % unchanged because no sourced basis was found to change it TO, and
+    % changing it would move results without improving their justification.
+    p.Pipe.selfLoss = 0.04;   % per hour (tau ~24.9 h) -- ASSUMED, see above
 
     % Economics -- THREE NAMED HYDROGEN-PRICE SCENARIOS.
     %
