@@ -48,6 +48,12 @@ function mc_aggregate(scriptName)
     end
 
     idxAll = []; pwl = []; roll = []; res = []; seasonAll = {}; seedAll = [];
+    % Scripts other than month4e carry a different set of per-draw vectors.
+    % They are collected generically so adding a script needs no new plumbing
+    % here beyond a registry entry below.
+    extra = struct();
+    skip = {'script','chunkIdx','nChunk','drawIdx','nDrawTotal','drawSeason', ...
+            'drawSeed','seasons','nSeeds','dPWL','dRolling','dReserve'};
     nDrawTotal = []; seasons = {}; nSeeds = [];
     for f = 1:numel(files)
         S = load(fullfile(outDir, files(f).name));
@@ -60,11 +66,18 @@ function mc_aggregate(scriptName)
                   files(f).name, c.nDrawTotal, nDrawTotal);
         end
         idxAll    = [idxAll;    c.drawIdx(:)];
-        pwl       = [pwl;       c.dPWL(:)];
-        roll      = [roll;      c.dRolling(:)];
-        res       = [res;       c.dReserve(:)];
+        % month4e's three named vectors; other scripts carry their own set,
+        % picked up generically below.
+        if isfield(c, 'dPWL');     pwl  = [pwl;  c.dPWL(:)];     end
+        if isfield(c, 'dRolling'); roll = [roll; c.dRolling(:)]; end
+        if isfield(c, 'dReserve'); res  = [res;  c.dReserve(:)]; end
         seasonAll = [seasonAll; c.drawSeason(:)];
         seedAll   = [seedAll;   c.drawSeed(:)];
+        for v = fieldnames(c)'
+            if any(strcmp(v{1}, skip)); continue; end
+            if ~isfield(extra, v{1}); extra.(v{1}) = []; end
+            extra.(v{1}) = [extra.(v{1}); c.(v{1})(:)];
+        end
     end
 
     % ---- completeness: every draw exactly once, no gaps, no duplicates ----
@@ -84,7 +97,9 @@ function mc_aggregate(scriptName)
     end
 
     % ---- reassemble in draw-index order ----------------------------------
-    dPWL = pwl(order)'; dRolling = roll(order)'; dReserve = res(order)';
+    if ~isempty(pwl);  dPWL     = pwl(order)';  else; dPWL = [];     end
+    if ~isempty(roll); dRolling = roll(order)'; else; dRolling = []; end
+    if ~isempty(res);  dReserve = res(order)';  else; dReserve = []; end
     drawSeason = seasonAll(order);
 
     fprintf(['Aggregated %d chunk files -> %d draws, complete and in order.\n' ...
@@ -94,6 +109,26 @@ function mc_aggregate(scriptName)
     switch scriptName
         case 'month4e'
             mc_report_month4e(dPWL, dRolling, dReserve, drawSeason, seasons, nSeeds);
+        case 'month4i'
+            % p and hpRef are deterministic properties of the model, not of
+            % any draw, so they are rebuilt here exactly as the script builds
+            % them rather than shipped in every chunk file.
+            addpath(fullfile(here, '..', 'month3_multiscale_optimization'));
+            p = multiscale_default_params(); p.HeatPump.usePWL = true;
+            % The four parameter variants and optFull are deterministic
+            % configurations, rebuilt here exactly as the script builds them.
+            pPWL = p; pChord = p; pChord.HeatPump.nSegments = 1;
+            pLegacy = p; pLegacy.HeatPump.usePWL = false;
+            pCurv = p; pCurv.HeatPump.placement = 'curvature';
+            S = struct('p', p, 'nDraw', nDrawTotal, 'seasons', {seasons}, ...
+                       'drawSeason', {drawSeason}, 'hpRef', heatpump_curve(p, 9.0), ...
+                       'pPWL', pPWL, 'pChord', pChord, 'pCurv', pCurv, ...
+                       'pLegacy', pLegacy, ...
+                       'optFull', struct('useIntraday', true, 'reserveScale', 1.0));
+            for v = fieldnames(extra)'
+                S.(v{1}) = extra.(v{1})(order)';
+            end
+            mc_report_month4i(S);
         otherwise
             error('mc_aggregate:unknownScript', ...
                   'No reporter registered for "%s".', scriptName);

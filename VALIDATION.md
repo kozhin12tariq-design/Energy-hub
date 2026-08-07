@@ -2912,3 +2912,54 @@ duplication regardless.
 **~46.5 MB × (draws per chunk) × (configs per draw).** For `main_month4e` at 5
 draws/chunk × 5 configs = 25 day-sims ≈ **1.2 GB**. 60 draws → 12 chunks.
 `main_month4j` runs more configurations per draw and needs a smaller chunk.
+
+---
+
+# Chunking `main_month4i`: equivalence holds on every statistic
+
+The `main_month4e` pattern applied to the heat-pump gate. Same design: chunk
+selection via `MC_CHUNK`/`MC_NCHUNK`, partition over the **ordered draw index**,
+raw per-draw vectors saved (never partial statistics), and the reporting block
+extracted verbatim into `mc_report_month4i.m` so both paths print from one
+implementation.
+
+**Budget:** 60 draws × 5 day-sims = 300 ≈ 13.6 GB unchunked. At 5 draws/chunk
+(25 day-sims ≈ 1.14 GB), 12 chunks.
+
+## The acceptance test — and an honest qualification
+
+6 draws single-process vs 3 chunks of 2, aggregated. The full diff is **8 lines,
+and every one of them is a wall-clock measurement**:
+
+```
+< Mean closed-loop solve time, PWL                4.403 s
+> Mean closed-loop solve time, PWL                4.347 s
+< Added solve time                               +32.1 %
+> Added solve time                               +31.0 %
+```
+
+With those excluded: **ALL STATISTICS IDENTICAL.**
+
+**This is a weaker claim than the one made for `main_month4e`, and the
+difference is stated rather than glossed.** 4e is byte-for-byte identical
+because it reports no timings. 4i reports `tic`/`toc` wall-clock, which is
+*measured*, not *computed*, and cannot be reproducible across processes on a
+shared machine. Every computed quantity — the gate mean, both intervals, the
+sign test, all per-season rows, the mechanism table, the curvature-placement
+comparison — matches exactly. Claiming byte-identity for 4i would be false.
+
+## Two defects found while applying the pattern
+
+1. **The loop-close replacement silently missed** (`approx_error(pCurv, fcD, Ca)`
+   where the patch expected `Cd`), leaving one `end` too many and a parse error.
+   Caught immediately by the run rather than by inspection.
+2. **The aggregator hard-coded month4e's three vectors** (`dPWL`, `dRolling`,
+   `dReserve`), so it errored on any script carrying a different set. It now
+   collects per-draw vectors generically, with those three treated as optional.
+
+## Model-level diagnostics run once, not per chunk
+
+The curve/slope check and the ordering-binary counterfactual are properties of
+the **model**, not of any draw. They run in the single-process path and in
+**chunk 0** only; other chunks skip them via `showDiag`. `hpRef` is a curve fit
+with no solve, so it is computed on every path — the reporter needs it.
