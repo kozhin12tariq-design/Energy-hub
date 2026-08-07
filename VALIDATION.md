@@ -2963,3 +2963,77 @@ The curve/slope check and the ordering-binary counterfactual are properties of
 the **model**, not of any draw. They run in the single-process path and in
 **chunk 0** only; other chunks skip them via `showDiag`. `hpRef` is a curve fit
 with no solve, so it is computed on every path — the reporter needs it.
+
+---
+
+# The heat-pump gate at n = 10: the mean flips sign, the verdict does not
+
+`main_month4i` had **never completed** at `nSegments = 10` — it OOM-killed at
+8.6 GB. Chunked into 12 processes of 5 draws it runs to completion. This is the
+first result at the shipped segment count.
+
+## Memory ceiling held, and slightly exceeded the prediction
+
+| | predicted | measured |
+|---|---|---|
+| Peak RSS per chunk | ~1.14 GB | **1.40–1.45 GB** |
+| Wall clock per chunk | — | 93–142 s |
+| **Total, 12 chunks** | — | **~22 min** |
+
+Every chunk exited 0. The measured peak is ~25% above the budget rule's
+estimate, so the rule is optimistic — worth stating, since a reader sizing
+chunks for a smaller machine should allow headroom rather than take
+46.5 MB × sims as a ceiling.
+
+## The gate — still does not pass
+
+| | n = 5 | n = 10 |
+|---|---|---|
+| Pooled mean | −0.063% | **+0.207%** |
+| 95% CI (t) | [−0.352, +0.226] | [−0.177, +0.591] |
+| 95% CI (bootstrap) | [−0.353, +0.217] | [−0.175, +0.579] |
+| Sign test | 40/60, p = 0.013 | **40/60, p = 0.013** |
+| **Verdict** | spans zero | **spans zero** |
+
+**The pooled mean changes sign — from −0.063% to +0.207% — and the verdict does
+not change.** Both intervals still span zero at both segment counts, and the
+sign test is identical (40 of 60, p = 0.013) to three decimal places.
+
+That combination is worth stating precisely, because it is easy to misread in
+either direction. A sign flip in a point estimate sounds like a reversal; it is
+not one here, because the estimate was never distinguishable from zero at either
+segment count. **The honest summary is that refining the segment count did not
+rescue the heat-pump gate, and Tasks 2 and 3 of the v10 session — PV inverter
+and battery PWL — remain correctly unrun.**
+
+Per season, all three verdicts unchanged:
+
+| Season | n = 5 | n = 10 | verdict |
+|---|---|---|---|
+| winter | +0.244% | +0.250% | resolved, both |
+| shoulder | +0.985% | **+1.892%** | resolved, both — nearly doubled |
+| summer | −1.419% | −1.522% | reliable cost, both |
+
+## Curvature placement gets worse, not better
+
+| | n = 5 | n = 10 |
+|---|---|---|
+| Curvature vs chord | −0.137% [−0.580, +0.307] | **−0.460% [−0.803, −0.117]** |
+| Verdict | spans zero | **mean nonzero but outlier-driven** (36/60, p = 0.16) |
+| summer | −2.211% | **−2.127%**, reliable cost |
+
+At n = 10 the curvature-placed interval no longer spans zero — it sits entirely
+**negative**. The sign test does not reject (36/60, p = 0.16), so the verdict is
+outlier-driven rather than a resolved cost, but the direction is now
+unambiguous: **curvature placement is worse than uniform at this segment count.**
+
+The mechanism is visible in the breakpoints. At n = 10 the curvature fit places
+seven of ten breakpoints below u = 0.071 — `0.000 0.007 0.014 0.023 0.034 0.049
+0.071 0.171 0.337 0.619 1.000` — concentrating almost all resolution in a band
+the heat pump barely occupies outside summer, and leaving the 0.34–1.00 range
+spanned by two wide segments. More segments made the placement heuristic's
+existing bias worse rather than better.
+
+**This does not change the v10 conclusion; it strengthens it.** The curvature
+"fix" was already withdrawn after the covering-COP correction. At n = 10 it is
+not merely unresolved but pointing the wrong way.
