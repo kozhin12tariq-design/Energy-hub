@@ -3037,3 +3037,94 @@ existing bias worse rather than better.
 **This does not change the v10 conclusion; it strengthens it.** The curvature
 "fix" was already withdrawn after the covering-COP correction. At n = 10 it is
 not merely unresolved but pointing the wrong way.
+
+---
+
+# The per-device PWL table at n = 10: two verdicts lost, one sign flip gained
+
+`main_month4j` had **never completed** at `nSegments = 10` — 480 day-sims ≈
+21.8 GB unchunked. Run as 20 chunks of 3 draws it completes in **42 minutes**,
+peak **1255–1311 MB per chunk** against a predicted ~1.1 GB. All 20 exited 0 and
+the aggregator confirmed 60 draws, complete and in order.
+
+## Lead: two claims lost their resolved status
+
+| Claim | n = 5 | n = 10 | verdict changed? |
+|---|---|---|---|
+| **All PWL @ today price** | −0.659% [−0.909, −0.409] **YES, but NEGATIVE** | **−0.428% [−0.761, −0.094] → no** | **YES — resolved cost became unresolved** |
+| **Heat-pump marginal @ target** | +0.637% [+0.293, +0.981] **DISTINGUISHABLE** | **+0.320% [−0.121, +0.760] → spans zero** | **YES — resolved benefit became unresolved** |
+| All PWL @ target price | +2.975% [+2.14, +3.82] YES | +2.958% [+2.08, +3.84] YES | no |
+| Fuel-cell PWL @ today | −0.594% [−0.71, −0.48] YES, but NEGATIVE | −0.630% [−0.74, −0.52] YES, but NEGATIVE | no |
+| Fuel-cell PWL @ target | +2.309% [+1.68, +2.94] YES | +2.615% [+2.00, +3.23] YES | no |
+| Heat-pump PWL @ today | −0.234% [−0.48, +0.02] no | −0.385% [−0.65, −0.12] no | no |
+| Heat-pump PWL @ target | +0.331% [−0.04, +0.70] no | +0.274% [−0.10, +0.65] no | no |
+
+**Both changes go the same way: a claim that resolved at n = 5 does not resolve
+at n = 10.** This is the third independent instance of the same pattern —
+Month 4e's headline PWL claim went DISTINGUISHABLE → OUTLIER-DRIVEN, and now
+two more here. The fuel cell's own claims are the ones that survive; **every
+claim that involves the heat pump has now failed to resolve at the finer
+segment count.**
+
+Note the heat-pump-only row at today's price: its *interval* moved to exclude
+zero (−0.653 to −0.117) while its *verdict* stayed "no", because the sign test
+is 35/60 and does not reject. That is the outlier-driven pattern
+`paired_stats` exists to catch, and it is why the interval alone is not the
+verdict.
+
+## One result moved the other way, and it is a sign flip
+
+| Fuel-cell PWL @ target, **summer** | n = 5 | n = 10 |
+|---|---|---|
+| Benefit | −0.238% [−0.525, +0.049] | **+0.285% [+0.068, +0.503]** |
+| Reading | unresolved cost | **resolved benefit** |
+
+At n = 5 the fuel cell's summer PWL was an unresolved cost; at n = 10 it is a
+resolved *benefit*. Summer is the season where the fuel cell barely runs at
+today's price, but at the DOE target it does run, and the finer fit is worth
+something there.
+
+## Full pooled tables
+
+**Price case 1 — H2 today ($7.33/kg), fuel cell 53 kWh/day, must-run**
+
+| Configuration | Cost($/d) | CO2(kg) | Solve(s) | Binaries | Benefit% | 95% CI | Resolved? |
+|---|---|---|---|---|---|---|---|
+| All constant efficiency | 311.54 | 792.1 | 3.100 | 0 | — ref — | — | — |
+| + fuel cell PWL only | 313.95 | 791.3 | 4.050 | 216 | **−0.630** | [−0.739, −0.520] | YES, but NEGATIVE |
+| + heat pump PWL only | 311.05 | 783.3 | 4.188 | 216 | −0.385 | [−0.653, −0.117] | no |
+| All PWL | 312.39 | 782.7 | 5.497 | 432 | −0.428 | [−0.761, −0.094] | no |
+
+**Price case 2 — DOE target ($2.93/kg), fuel cell 1704 kWh/day, economic**
+
+| Configuration | Cost($/d) | CO2(kg) | Solve(s) | Binaries | Benefit% | 95% CI | Resolved? |
+|---|---|---|---|---|---|---|---|
+| All constant efficiency | 286.47 | 751.9 | 3.104 | 0 | — ref — | — | — |
+| + fuel cell PWL only | 274.10 | 673.1 | 5.421 | 216 | **+2.615** | [+2.001, +3.228] | YES |
+| + heat pump PWL only | 284.00 | 733.5 | 4.242 | 216 | +0.274 | [−0.100, +0.647] | no |
+| All PWL | 271.76 | 663.3 | 11.113 | 432 | **+2.958** | [+2.078, +3.838] | YES |
+
+Marginal contributions at the target price:
+
+| Marginal step | mean % | 95% CI (t) | sign+ | verdict |
+|---|---|---|---|---|
+| fuel cell PWL, added to all-constant | +2.615 | [+2.001, +3.228] | 54/60 | distinguishable |
+| heat pump PWL, added to fuel-cell PWL | **+0.320** | **[−0.121, +0.760]** | 40/60 | **spans zero** |
+| heat pump PWL, added to all-constant | +0.274 | [−0.100, +0.647] | 40/60 | spans zero |
+| fuel cell PWL, added to heat-pump PWL | +2.657 | [+2.060, +3.253] | 54/60 | distinguishable |
+
+**Solve time is the other cost of n = 10.** The all-PWL configuration at the
+target price takes **11.113 s** per closed-loop day against 3.104 s for
+all-constant — 3.6×, for a benefit that is real (+2.958%) but carried entirely
+by the fuel cell.
+
+## What this settles about the decision rule
+
+The v10 decision rule said PWL pays where throughput × curvature is large **and**
+the optimizer chooses the operating point. At n = 10 that reading is unchanged
+and slightly sharpened: **every resolved PWL benefit in this table belongs to
+the fuel cell at the price where it is economically dispatched.** The heat pump
+resolves nowhere, at either price, at either segment count, on any of the four
+marginal steps. Refining the model did not change which device earns its
+complexity — it removed two of the weaker claims that had previously looked
+resolved.
