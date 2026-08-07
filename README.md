@@ -337,7 +337,9 @@ identical to single-process (see VALIDATION.md).
 
 ```bash
 cd matlab/month4_case_studies_sensitivity
-./run_chunked.sh month4e 12          # 12 chunks of 5 draws, then aggregate
+./run_chunked.sh month4e             # 12 chunks of 5 draws, then aggregate
+./run_chunked.sh month4i             # 12 chunks of 5 draws
+./run_chunked.sh month4j             # 20 chunks of 3 draws (heaviest: 8 sims/draw)
 ```
 
 Windows / no bash — the same thing manually:
@@ -345,6 +347,7 @@ Windows / no bash — the same thing manually:
 ```
 cd matlab\month4_case_studies_sensitivity
 octave --no-gui --eval "MC_CHUNK=0; MC_NCHUNK=12; main_month4e_monte_carlo"
+(entry points: main_month4i_heatpump_pwl_gate, main_month4j_pwl_device_table)
 octave --no-gui --eval "MC_CHUNK=1; MC_NCHUNK=12; main_month4e_monte_carlo"
 ...                                  (chunks 0..11, one process each)
 octave --no-gui --eval "mc_aggregate('month4e')"
