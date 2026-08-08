@@ -3128,3 +3128,81 @@ resolves nowhere, at either price, at either segment count, on any of the four
 marginal steps. Refining the model did not change which device earns its
 complexity — it removed two of the weaker claims that had previously looked
 resolved.
+
+---
+
+# Two diagnostics on the heat-pump gate: one mechanism found, one hypothesis refuted
+
+Diagnostic only. No model behaviour, parameter or statistic was changed, and no
+reported figure moved — `p.PWL.nSegments` and `p.HeatPump.nSegments` are both
+still 10, verified after the session.
+
+## Item A — the identical sign test was NOT structural. The comparison was confounded.
+
+The proposed explanation was that the same 40 draws favour PWL at both segment
+counts, making 40/60 and p = 0.013 identical by construction. **That is not what
+the data shows, and the reason matters more than the hypothesis.**
+
+Regenerating the n = 5 gate with the **current** parameter set and comparing
+per-draw against n = 10:
+
+| | n = 5 (regenerated) | n = 10 |
+|---|---|---|
+| Draws favouring PWL | **31/60** | **40/60** |
+| Mean | **−0.331%** | +0.207% |
+| Sign differs on | **9 of 60 draws** | |
+| Direction of every flip | **− → + (9), + → − (0)** | |
+| Correlation of per-draw `dGate` | **0.697** | |
+
+So the sign pattern is **not** invariant to segment count — nine draws change
+sign, all in the same direction — and the regenerated n = 5 sign count is
+**31/60, not the 40/60 in the reported figure.**
+
+**The historical n = 5 gate figure (−0.063%, 40/60, p = 0.013) and the n = 10
+figure were produced by different parameter sets.** `bd2605f` changed the
+segment count 5 → 10; **`9bf7dd3`, four commits later, changed
+`p.Building.selfLoss` from 0.15 to the derived 0.1426.** The n = 5 numbers
+predate that change; the n = 10 numbers postdate it. The two differ in *two*
+things, not one.
+
+**That is the real explanation of the "coincidence": it is not a coincidence
+and it is not structural — it is an artifact of comparing across a parameter
+change.** With parameters held fixed, moving 5 → 10 shifts the mean from
+−0.331% to +0.207% and the sign count from 31/60 to 40/60. The identical 40/60
+in the two published figures is an accident of the confound.
+
+**This does not invalidate either published figure** — each is correct for the
+parameter set that produced it, and the gate verdict (spans zero) is the same
+in every version measured. What it invalidates is reading the *pair* as a clean
+segment-count comparison. Any future n = 5 vs n = 10 statement on this gate
+should quote the regenerated n = 5 value of −0.331% [31/60], not the historical
+−0.063%.
+
+## Item B — shoulder doubled because it is the only season that traverses the curve
+
+Confirmed, with the decisive quantity: **how many PWL segments the dispatch
+actually occupies.**
+
+| Season | median *u* | IQR width | range | segments occupied, n=5 | n=10 | gate change |
+|---|---|---|---|---|---|---|
+| winter | 0.919 | 0.165 | 0.549–1.000 | 3 of 5 | **5 of 10** | +0.006 (static) |
+| shoulder | 0.525 | 0.249 | 0.163–0.927 | **5 of 5** | **9 of 10** | **+0.907 (doubled)** |
+| summer | 0.257 | 0.298 | 0.000–0.470 | 3 of 5 | 5 of 10 | −0.103 |
+
+**Winter is pinned near rating** — median load 0.919, interquartile range
+0.833–0.998, never below 0.549. It occupies only the top half of the curve, so
+additional segments subdivide territory the dispatch never visits. This is the
+already-documented winter saturation of the deliberately undersized heat pump,
+appearing directly as segment occupancy.
+
+**Shoulder traverses almost the entire curve** — 0.163 to 0.927, occupying 9 of
+10 segments. Going 5 → 10 gains it **+4 occupied segments** against winter's
++2, and the new ones lie in mid-range territory the dispatch actually uses.
+That is where finer COP resolution can pay, and it is the only season where it
+did.
+
+Summer is the counter-case that keeps the rule honest: it has the **widest
+range** but sits at the bottom of the curve where a uniform fit is at its most
+optimistic, so its benefit is negative at both segment counts. **Range alone
+does not predict the benefit; occupancy of territory the fit represents *well*
+does.**
