@@ -750,20 +750,20 @@ try
 
     subplot(2,2,1);
     bar(cost); set(gca,'XTickLabel',{'1','2','3','4'});
-    ylabel('$/day'); title('Operational cost'); grid on;
+    xlabel('Case'); ylabel('$/day'); title('Operational cost'); grid on;
 
     subplot(2,2,2);
     bar(emis); set(gca,'XTickLabel',{'1','2','3','4'});
-    ylabel('kgCO2/day'); title('Carbon emissions'); grid on;
+    xlabel('Case'); ylabel('kgCO2/day'); title('Carbon emissions'); grid on;
 
     subplot(2,2,3);
     bar(peak); set(gca,'XTickLabel',{'1','2','3','4'});
     hold on; plot([0.5 4.5],[feederCap feederCap],'r--','LineWidth',1.2);
-    ylabel('kW'); title('Peak grid import (dashed = feeder capacity for cases 2-4)'); grid on;
+    xlabel('Case'); ylabel('kW'); title('Peak grid import (dashed = feeder capacity for cases 2-4)'); grid on;
 
     subplot(2,2,4);
     bar([0 unmetE(2:4)]); set(gca,'XTickLabel',{'1','2','3','4'});
-    ylabel('kWh/day'); title('Unmet energy (feeder-capacity violations)'); grid on;
+    xlabel('Case'); ylabel('kWh/day'); title('Unmet energy (feeder-capacity violations)'); grid on;
 
     sgtitle_text = 'Case studies: 1=Conventional, 2=Day-ahead only, 3=No robust reserve, 4=Full proposed system';
     annotation('textbox',[0.05 0.95 0.9 0.05],'String',sgtitle_text,'EdgeColor','none','HorizontalAlignment','center','FontWeight','bold');

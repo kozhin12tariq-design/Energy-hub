@@ -1,10 +1,20 @@
 function mc_report_month4i(S)
 %MC_REPORT_MONTH4I Statistics and verdicts for the Month 4i heat-pump gate.
+%   INTERNAL REPORTER, not a script -- call mc_aggregate('month4i') instead.
 %
 %   Extracted VERBATIM from main_month4i_heatpump_pwl_gate.m so the
 %   single-process path and the chunked path print identical output BY
 %   CONSTRUCTION rather than by two implementations agreeing. Takes a struct
 %   of raw per-draw vectors; statistics are never combined across chunks.
+
+    %% NOT A SCRIPT. Running this bare gives a cryptic undefined-variable error,
+    %% so it says so itself instead.
+    if nargin < 1
+        error('mc_report_month4i:notAScript', ...
+              ['mc_report_month4i is an INTERNAL REPORTER, not a script.\n' ...
+               'Run  mc_aggregate(''month4i'')  to print the report from saved chunk\n' ...
+               'files, or run  main_month4i_heatpump_pwl_gate  directly.']);
+    end
 
     thisFile = mfilename('fullpath');
     addpath(fileparts(thisFile));

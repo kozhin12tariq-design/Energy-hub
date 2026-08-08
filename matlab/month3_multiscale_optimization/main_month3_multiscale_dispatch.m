@@ -593,7 +593,7 @@ try
     plot(fc.hours, DA.Pg_imp - DA.Pg_exp, '-o', 'DisplayName','Day-ahead plan'); hold on;
     plot((1:96)/4, res.ID_Pg_imp - res.ID_Pg_exp, '-', 'DisplayName','Intraday committed');
     plot(tHours, res.Pg_imp5 - res.Pg_exp5, '-', 'LineWidth',1, 'DisplayName','Real-time actual');
-    ylabel('Net grid import (kW)'); legend('Location','northeast'); grid on;
+    ylabel('Net grid import (kW)'); xlabel('Hour of day'); legend('Location','northeast'); grid on;
     title('Grid interchange across the three dispatch levels');
 
     subplot(3,1,2);

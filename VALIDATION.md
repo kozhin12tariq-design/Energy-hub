@@ -2434,8 +2434,24 @@ Conditions 3 and 4 are about **breakpoint placement, not segment count**.
 
 ### Reconciling with Month 4e
 
-Month 4e measured the fuel cell's PWL benefit at **+1.42%** on the
-delivered-target price; this table gives **+2.309%** for the same comparison.
+**At the shipped `nSegments = 10`**, Month 4e measures the fuel cell's PWL
+benefit at **+0.94% pooled** (median +0.28%, CI [+0.47, +1.42], 32/60, sign
+*p* = 0.7); this table gives **+2.6%** for the same comparison. An earlier
+version of this passage cited **+1.42%**, which is the **n = 5** value — it
+compared this table's n = 10 result against Month 4e's n = 5 result. Corrected.
+
+**The verdicts differ, and that matters more than the gap.** Month 4e's figure
+is **outlier-driven** at n = 10 (32/60 is a coin flip; the sign test does not
+reject) while this table's is **resolved** at 54/60. One is a consistent
+effect; the other is a mean carried by a minority of draws.
+
+The thermal correction still explains the *direction* and is not reshaped to
+fit: Month 4e does not charge its constant-efficiency comparator for the heat
+that comparator over-promises, so 4e understates the benefit and this table,
+which does charge it, reports a larger one. **What the correction does not
+explain is the difference in consistency** — a thermal-accounting difference
+shifts a magnitude, it does not turn 54/60 into 32/60. That part is left
+unexplained rather than attributed to the correction.
 The difference is the **thermal correction** described above, which Month 4e
 did not apply — its constant-efficiency comparator over-promised heat and was
 not charged for it. Both numbers are positive and resolved; this one is the
@@ -3206,3 +3222,36 @@ range** but sits at the bottom of the curve where a uniform fit is at its most
 optimistic, so its benefit is negative at both segment counts. **Range alone
 does not predict the benefit; occupancy of territory the fit represents *well*
 does.**
+
+
+---
+
+# Reference run: all three Monte Carlo scripts complete at n = 10
+
+Recorded as the reference measurement. All three ran to completion, chunked, at
+the shipped `nSegments = 10`.
+
+| Result | Value |
+|---|---|
+| 4e — PWL vs constant, pooled | **+0.94%**, median +0.28%, CI [+0.47, +1.42], 32/60, p = 0.7, **outlier-driven** |
+| 4e — Rolling layers, pooled | +2.86%, CI [+0.97, +4.76], 32/60, p = 0.7, outlier-driven |
+| 4e — Robust reserve, pooled | +1.56%, CI [+1.09, +2.02], 40/60, p = 0.013, **distinguishable** |
+| 4i — heat-pump gate | +0.206%, CI [−0.178, +0.591], 40/60 — **gate does not pass** |
+| 4j — All PWL @ target | **+3.007% [+2.123, +3.890]**, CO2 751.9 → 663.1 |
+| 4j — FC PWL @ today | −0.630% [−0.739, −0.520] |
+
+**Runtime, measured: 4j took 87.6 minutes** across 20 chunks — against the
+30–45 min this repository previously estimated. The estimate was wrong and is
+corrected to **~90 minutes** here, in `README.md` and in the driver header.
+
+## Small differences between machines are the documented solver sensitivity
+
+An earlier run of the same scripts on a different machine gave pooled PWL
+**+0.87%** against **+0.94%**, and robust reserve **+1.63%** against **+1.56%**.
+These are **not an inconsistency.** They sit inside the **~1% solver-vertex
+sensitivity in realized cost** this project has documented since v8: `glpk` may
+return a different optimal vertex among ties, and the resulting dispatch differs
+slightly at identical cost. Every verdict is identical across the two sets —
+outlier-driven stays outlier-driven, distinguishable stays distinguishable, and
+the gate spans zero in both. A reader comparing the two sets should expect
+agreement to about a percentage point on means, and exact agreement on verdicts.

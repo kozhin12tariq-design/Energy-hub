@@ -1,5 +1,6 @@
 function mc_report_month4e(dPWL, dRolling, dReserve, drawSeason, seasons, nSeeds)
 %MC_REPORT_MONTH4E Statistics and verdicts for the Month 4e Monte Carlo.
+%   INTERNAL REPORTER, not a script -- call mc_aggregate('month4e') instead.
 %
 %   Extracted VERBATIM from main_month4e_monte_carlo.m so the
 %   single-process path and the chunked path print byte-identical output
@@ -12,6 +13,15 @@ function mc_report_month4e(dPWL, dRolling, dReserve, drawSeason, seasons, nSeeds
 %   combined across chunks -- means and confidence intervals do not
 %   average -- so the chunk files carry raw differences only and this
 %   runs once, on all of them.
+
+    %% NOT A SCRIPT. Running this bare gives a cryptic undefined-variable error,
+    %% so it says so itself instead.
+    if nargin < 6
+        error('mc_report_month4e:notAScript', ...
+              ['mc_report_month4e is an INTERNAL REPORTER, not a script.\n' ...
+               'Run  mc_aggregate(''month4e'')  to print the report from saved chunk\n' ...
+               'files, or run  main_month4e_monte_carlo  directly.']);
+    end
 
     thisFile = mfilename('fullpath');
     addpath(fileparts(thisFile));

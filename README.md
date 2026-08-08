@@ -339,7 +339,7 @@ identical to single-process (see VALIDATION.md).
 cd matlab/month4_case_studies_sensitivity
 ./run_chunked.sh month4e             # 12 chunks of 5 draws, then aggregate
 ./run_chunked.sh month4i             # 12 chunks of 5 draws
-./run_chunked.sh month4j             # 20 chunks of 3 draws (heaviest: 8 sims/draw)
+./run_chunked.sh month4j             # 20 chunks of 3 draws (heaviest: 8 sims/draw, ~90 min measured)
 ```
 
 Windows / no bash — the same thing manually:
@@ -586,7 +586,7 @@ main_month4f_siting_comparison      % bus 18 vs bus 25
 main_month4g_voltage_heatmap        % 33 buses x 288 steps
 main_month4h_rule_based_baseline    % optimization vs heuristic control
 main_month4i_heatpump_pwl_gate      % does heat-pump PWL pay? ~15 min
-main_month4j_pwl_device_table       % per-device PWL table, ~35 min
+main_month4j_pwl_device_table       % per-device PWL table, ~90 min (measured 87.6)
 ```
 
 Each script is self-contained (`clear; clc;` + whatever `addpath` it
