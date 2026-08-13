@@ -661,6 +661,85 @@ try
     title('All four storage devices');
     legend('Location','eastoutside');
 
+
+    % ============ FIGURE: energy-flow accounting, electrical and thermal ===
+    % DISPLAY ONLY. Integrates the completed dispatch at the 1/12 h interval
+    % weight used throughout; computes no new dispatch quantity.
+    eff3 = hub_efficiency(p, fc, res);
+    dtH  = 1/12;
+    uFCq = max(res.PH2_5(:),0)/p.PWL.FC_H2_max;
+    eFCe3 = sum(p.PWL.eta_FC_e_func(max(uFCq,1e-12)).*max(res.PH2_5(:),0))*dtH;
+    eFCh3 = sum(p.PWL.eta_FC_th_func(max(uFCq,1e-12)).*max(res.PH2_5(:),0))*dtH;
+    ePVac = p.eta_PV*sum(max(res.Ps5(:),0))*dtH;
+    eImp3 = sum(res.Pg_imp5(:))*dtH;  eExp3 = sum(res.Pg_exp5(:))*dtH;
+    eLe3  = sum(fc.RT.Lelec(:))*dtH;  eLh3 = sum(fc.RT.Lheat(:))*dtH;
+    eHPe3 = sum(max(res.Php5(:),0))*dtH;
+    % Electrical storage net release (battery + EV), thermal net release.
+    eStoE = (res.SOC0.Batt - res.SOCend.Batt)*p.Batt.Emax + ...
+            (res.SOC0.EV   - res.SOCend.EV)  *p.EV.Emax;
+    eStoT = (res.SOC0.Building - res.SOCend.Building)*p.Building.Emax + ...
+            (res.SOC0.Pipe     - res.SOCend.Pipe)    *p.Pipe.Emax;
+    eHPh3 = eff3.heatSupplied_kWh - eFCh3;   % heat-pump thermal output
+
+    figure('Position',[180 180 1150 620]);
+
+    subplot(2,1,1);
+    inE  = [eImp3, ePVac, eFCe3, max(eStoE,0)];
+    outE = [eLe3, eHPe3, max(-eStoE,0), eExp3];
+    barh([1 2], [inE, 0 0 0 0; 0 0 0 0, outE], 'stacked');
+    set(gca,'YTick',[1 2],'YTickLabel',{'IN','OUT'});
+    xlabel('Energy (kWh/day)'); grid on;
+    title(sprintf('Electrical energy flow, shipped default day (in %.0f kWh, out %.0f kWh)', ...
+          sum(inE), sum(outE)));
+    legend({'Grid import','PV (AC)','Fuel cell elec','Storage discharge', ...
+            'Electrical load','Heat pump','Storage charge','Grid export'}, ...
+            'Location','eastoutside');
+
+    subplot(2,1,2);
+    inT  = [eHPh3, eFCh3, max(eStoT,0)];
+    % Self-discharge is called out explicitly: it is the LARGEST single
+    % first-law loss in this hub and the mechanism behind the conventional
+    % case winning on first-law efficiency.
+    outT = [eLh3, max(-eStoT,0), eff3.lossSelfDischarge_kWh];
+    barh([1 2], [inT, 0 0 0; 0 0 0, outT], 'stacked');
+    set(gca,'YTick',[1 2],'YTickLabel',{'IN','OUT'});
+    xlabel('Energy (kWh/day)'); grid on;
+    title(sprintf(['Thermal energy flow (storage SELF-DISCHARGE = %.0f kWh/day, ' ...
+          'the largest single first-law loss)'], eff3.lossSelfDischarge_kWh));
+    legend({'Heat pump output','Fuel cell recovered heat','Thermal storage discharge', ...
+            'Heat load','Thermal storage charge','Storage self-discharge'}, ...
+            'Location','eastoutside');
+
+    % ================= FIGURE: seasonal comparison ========================
+    % Separate subplots rather than one axis: 51 next to 843 on a shared
+    % linear axis would render the summer bar invisible.
+    figure('Position',[200 200 1150 620]);
+    sc = [seaRes{1}.actualCost, seaRes{2}.actualCost, seaRes{3}.actualCost];
+    sq = [seaRes{1}.emissions_kgCO2, seaRes{2}.emissions_kgCO2, seaRes{3}.emissions_kgCO2];
+    sf = [sum(seaRes{1}.PH2_5), sum(seaRes{2}.PH2_5), sum(seaRes{3}.PH2_5)]/12;
+    sh = [sum(seaFc{1}.RT.Lheat), sum(seaFc{2}.RT.Lheat), sum(seaFc{3}.RT.Lheat)]/12;
+    quads = {sc, sq, sf, sh};
+    tls = {'Realized cost ($/day)','Emissions (kgCO2/day)', ...
+           'Fuel-cell fuel (kWh/day)','Heat demand (kWh/day)'};
+    for q = 1:4
+        subplot(2,2,q);
+        bar(quads{q}, 'FaceColor',[0.00 0.45 0.74]); grid on;
+        set(gca,'XTickLabel',{'winter','shoulder','summer'});
+        xlabel('Season'); ylabel(tls{q}); title(tls{q});
+        ylim([0 max(max(quads{q})*1.15, eps)]);
+        for b = 1:3
+            text(b, quads{q}(b), sprintf(' %.1f', quads{q}(b)), ...
+                 'HorizontalAlignment','center','VerticalAlignment','bottom','FontSize',8);
+        end
+        if q == 3
+            % The summer zero is a RESULT, not a clipped bar, and is labelled
+            % so: at today's hydrogen price nothing forces the fuel cell on
+            % outside the winter heat balance.
+            text(3, max(sf)*0.35, sprintf('0.0 -- fuel cell\nnever runs'), ...
+                 'HorizontalAlignment','center','Color',[0.85 0.33 0.10],'FontWeight','bold','FontSize',8);
+        end
+    end
+
 catch plot_err
     fprintf('\n[plots skipped: %s]\n', plot_err.message);
 end
