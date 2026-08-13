@@ -198,3 +198,69 @@ try
 catch plot_err
     fprintf('\n[plot skipped: %s]\n', plot_err.message);
 end
+
+%% FIGURE: IEEE 33 single-line diagram, NO-HUB BASE CASE ------------------
+% DISPLAY ONLY -- replots the base-case solve already computed at line 46.
+% Hand-coded coordinates: IEEE 33 has a conventional published layout and a
+% programmatic graph layout looks worse.
+try
+    % Trunk 1-18 left to right; laterals hang off buses 2, 3 and 6.
+    xy = zeros(33,2);
+    xy(1:18,1)  = 0:17;         xy(1:18,2)  = 0;              % substation + main trunk
+    xy(19:22,1) = 1:4;          xy(19:22,2) = 1.4;            % lateral at bus 2
+    xy(23:25,1) = 2:4;          xy(23:25,2) = -1.4;           % lateral at bus 3
+    xy(26:33,1) = 5:12;         xy(26:33,2) = -2.8;           % lateral at bus 6
+
+    % Branch power flow magnitude: downstream load carried by each branch,
+    % computed by walking the radial tree away from the slack.
+    nB = numel(branches);
+    flow = zeros(nB,1);
+    for b = 1:nB
+        tob = branches(b).To;
+        seen = false(33,1); stack = tob; seen(tob) = true;
+        while ~isempty(stack)
+            nd = stack(end); stack(end) = [];
+            for c = 1:nB
+                if branches(c).From == nd && ~seen(branches(c).To)
+                    seen(branches(c).To) = true; stack(end+1) = branches(c).To;
+                end
+            end
+        end
+        flow(b) = sum(busP_base(seen));
+    end
+    lw = 0.8 + 4.2 * flow / max(flow);
+
+    figure('Position',[170 170 1250 620]); hold on;
+    for b = 1:nB
+        i1 = branches(b).From; i2 = branches(b).To;
+        plot(xy([i1 i2],1), xy([i1 i2],2), '-', 'Color',[0.45 0.45 0.45], 'LineWidth', lw(b));
+    end
+    scatter(xy(:,1), xy(:,2), 170, Vmag_base(:), 'filled', 'MarkerEdgeColor','k');
+    cb = colorbar; ylabel(cb, 'Base-case voltage (pu)');
+    for i = 1:33
+        text(xy(i,1), xy(i,2)+0.30, sprintf('%d', i), 'HorizontalAlignment','center', 'FontSize', 8);
+    end
+    % Mark the host bus and the two alternative sitings this script evaluates.
+    plot(xy(25,1), xy(25,2), 'p', 'MarkerSize', 26, 'MarkerEdgeColor','r', 'LineWidth', 2);
+    text(xy(25,1), xy(25,2)-0.55, 'HUB (bus 25)', 'Color','r', 'HorizontalAlignment','center', 'FontWeight','bold');
+    plot(xy(18,1), xy(18,2), 'o', 'MarkerSize', 20, 'MarkerEdgeColor',[0 0 0.8], 'LineWidth', 1.6);
+    text(xy(18,1), xy(18,2)+0.75, 'bus 18 (weakest)', 'Color',[0 0 0.8], 'HorizontalAlignment','center', 'FontSize', 8);
+    plot(xy(33,1), xy(33,2), 'o', 'MarkerSize', 20, 'MarkerEdgeColor',[0 0 0.8], 'LineWidth', 1.6);
+    text(xy(33,1), xy(33,2)-0.55, 'bus 33', 'Color',[0 0 0.8], 'HorizontalAlignment','center', 'FontSize', 8);
+    plot(xy(1,1), xy(1,2), 's', 'MarkerSize', 18, 'MarkerFaceColor','k', 'MarkerEdgeColor','k');
+    text(xy(1,1), xy(1,2)+0.75, 'substation', 'HorizontalAlignment','center', 'FontWeight','bold', 'FontSize', 8);
+    hold off; axis equal off;
+    title(sprintf(['IEEE 33-bus test feeder, NO-HUB BASE CASE (node colour = voltage, line width = branch flow)\n' ...
+        'Losses %.3f kW, minimum %.4f pu at bus 18 -- these are Baran and Wu''s feeder, NOT a result of the hub'], ...
+        Ploss_base, min(Vmag_base)));
+
+    fprintf(['\nTHE SINGLE-LINE DIAGRAM IS THE NO-HUB BASE CASE, and that qualification is the\n' ...
+        'point of drawing it. %d of 33 buses already sit below 0.95 pu with nothing\n' ...
+        'connected, so a reader seeing a mostly-cool colour map must not attribute the\n' ...
+        'weakness to this work: it is a property of the published benchmark. The hub is\n' ...
+        'marked at bus 25 for orientation only -- no hub is present in this solve.\n'], ...
+        sum(Vmag_base < 0.95));
+catch plot_err
+    fprintf('\n[single-line diagram skipped: %s]\n', plot_err.message);
+end
+

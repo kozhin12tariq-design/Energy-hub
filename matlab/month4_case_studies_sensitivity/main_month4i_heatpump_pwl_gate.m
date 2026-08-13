@@ -135,6 +135,10 @@ pRlx = p; pRlx.diag.relaxOrder = true;
 fprintf('%-10s %12s %12s %14s %12s %12s\n', 'season', 'MILP pairs', 'LP pairs', ...
     'worst fill', 'cost LP', 'cost MILP');
 cfViol = zeros(1, numel(seasons)); cfWorst = ones(1, numel(seasons));
+% RETENTION ONLY, for the figure below. The scan logic, the violation
+% counts and everything printed are untouched -- this just keeps the
+% arrays the loop already computed instead of discarding them.
+cfPlot = struct('season',{},'wLP',{},'wMIP',{},'hour',{},'w',{},'nViol',{});
 for sIdx = 1:numel(seasons)
     fcCF  = forecast_profiles(42, 1.0, [], seasons{sIdx});
     DAmip = dayahead_dispatch(p,    fcCF);
@@ -156,6 +160,17 @@ for sIdx = 1:numel(seasons)
         end
     end
     cfViol(sIdx) = vLP; cfWorst(sIdx) = worstFill;
+    % Segment fill at the worst violating hour (or at the hour of peak
+    % heat-pump load when there is no violation, so the panel still shows
+    % what a compliant fill looks like).
+    if worstT > 0
+        tShow = worstT;
+    else
+        [~, tShow] = max(sum(DAmip.HPseg, 2));
+    end
+    cfPlot(end+1) = struct('season', seasons{sIdx}, ...
+                           'wLP',  DAlp.HPseg(tShow,:),  'wMIP', DAmip.HPseg(tShow,:), ...
+                           'hour', tShow, 'w', hpCF.w, 'nViol', vLP);
     if vLP > 0
         fprintf('%-10s %12d %12d %10.1f%% h%-2d %12.4f %12.4f\n', seasons{sIdx}, ...
             vMIP, vLP, 100*worstFill, worstT, DAlp.cost, DAmip.cost);
@@ -178,6 +193,52 @@ fprintf(['\nTHE BINARIES ARE LOAD-BEARING, AND ONLY WHERE THE PHYSICS SAYS THEY 
     'fuel cell, now measured on a second device rather than assumed to carry over.\n'], ...
     100*min(cfWorst), cfViol(1), cfViol(2), cfViol(3));
 fflush(stdout);
+
+
+%% FIGURE: LP relaxation vs MILP segment fill (correctness, not cost) -----
+% DISPLAY ONLY -- replots arrays the counterfactual above already computed.
+try
+    if ~isempty(cfPlot)
+        figure('Position',[160 160 1150 480]);
+        for q = 1:numel(cfPlot)
+            subplot(1, numel(cfPlot), q);
+            fillLP  = 100 * cfPlot(q).wLP(:)  ./ cfPlot(q).w(:);
+            fillMIP = 100 * cfPlot(q).wMIP(:) ./ cfPlot(q).w(:);
+            hb = bar([fillMIP fillLP], 'grouped');
+            set(hb(1), 'FaceColor', [0.00 0.45 0.74]);
+            set(hb(2), 'FaceColor', [0.85 0.33 0.10]);
+            ylim([0 105]); grid on;
+            xlabel('PWL segment'); ylabel('Segment fill (% of width)');
+            title(sprintf('%s -- hour %d, %d LP violation(s)', ...
+                  cfPlot(q).season, cfPlot(q).hour, cfPlot(q).nViol));
+            if q == 1; legend({'MILP (binaries on)','LP (relaxed)'}, 'Location','northeast'); end
+            % Annotate the inversion: the first segment the LP leaves unfilled
+            % while a later one carries load. That is the whole point.
+            if cfPlot(q).nViol > 0
+                for k = 1:(numel(fillLP)-1)
+                    if cfPlot(q).wLP(k+1) > 1e-6 && fillLP(k) < 99.9
+                        hold on;
+                        plot(k, fillLP(k), 'kv', 'MarkerSize', 10, 'MarkerFaceColor', 'y');
+                        text(k+0.15, fillLP(k)+8, sprintf('seg %d only %.1f%% full\nwhile seg %d carries load', ...
+                             k, fillLP(k), k+1), 'FontSize', 8);
+                        hold off;
+                        break
+                    end
+                end
+            end
+        end
+        fprintf(['\nTHE FIGURE IS A CORRECTNESS RESULT, NOT A COST ONE. Where a bar for segment k+1\n' ...
+            'is non-zero while segment k is short of 100%%, the LP has claimed heat the machine\n' ...
+            'cannot physically deliver at that fuel input -- the fill-order binaries are what\n' ...
+            'forbid it. That argument holds whichever way the cost gate below goes, and it does\n' ...
+            'not depend on a price regime, which is why it is the stronger of the two.\n' ...
+            'Winter and shoulder show no violation for the reason the table gives: the pump runs\n' ...
+            'near rating there, every segment is already full, and there is no spare capacity in\n' ...
+            'an early segment to leave empty. The defect appears precisely at PART LOAD.\n']);
+    end
+catch plot_err
+    fprintf('\n[segment-fill figure skipped: %s]\n', plot_err.message);
+end
 
 end  % showDiag
 
