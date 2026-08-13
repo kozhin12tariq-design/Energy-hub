@@ -248,3 +248,57 @@ try
 catch plot_err
     fprintf('\n[plots skipped: %s]\n', plot_err.message);
 end
+
+%% FIGURE: true efficiency curves with their PWL approximation ------------
+% DISPLAY ONLY. Uses the shipped pwl_utils('fit',...) machinery and the
+% shipped curve definitions -- no new fitting code, no computed value moved.
+try
+    addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'month3_multiscale_optimization'));
+    pF = multiscale_default_params();
+    nSeg = pF.PWL.nSegments;
+    uu = linspace(0, 1, 400)';
+
+    figure('Position',[150 150 1150 520]);
+
+    subplot(1,2,1);
+    plot(uu, pF.PWL.eta_FC_e_func(max(uu,1e-12)),  '-',  'LineWidth',1.8, 'DisplayName','\eta_e true'); hold on;
+    plot(uu, pF.PWL.eta_FC_th_func(max(uu,1e-12)), '-',  'LineWidth',1.8, 'DisplayName','\eta_{th} true');
+    % PWL overlay: breakpoints are (kW in, kW out), so divide out to get eta.
+    be = pF.PWL.bkpt_e; bt = pF.PWL.bkpt_th;
+    ue = be.x/pF.PWL.FC_H2_max; ut = bt.x/pF.PWL.FC_H2_max;
+    ee = be.y ./ max(be.x, eps);  et = bt.y ./ max(bt.x, eps);
+    plot(ue(2:end), ee(2:end), 'o--', 'LineWidth',1.2, 'MarkerSize',5, 'DisplayName',sprintf('\\eta_e PWL (%d seg)', nSeg));
+    plot(ut(2:end), et(2:end), 's--', 'LineWidth',1.2, 'MarkerSize',5, 'DisplayName',sprintf('\\eta_{th} PWL (%d seg)', nSeg));
+    [pk, ipk] = max(pF.PWL.eta_FC_e_func(max(uu,1e-12)));
+    plot(uu(ipk), pk, 'kp', 'MarkerSize',12, 'MarkerFaceColor','y', 'DisplayName','peak \eta_e');
+    text(uu(ipk)+0.03, pk, sprintf('peak %.3f at u=%.2f', pk, uu(ipk)));
+    hold off; grid on; xlabel('Load fraction u'); ylabel('Efficiency');
+    title('Fuel cell: true curves and PWL approximation'); legend('Location','southeast');
+
+    subplot(1,2,2);
+    pH = pF; pH.HeatPump.usePWL = true;
+    ambs = [0.5 7.0 7.0]; labs = {'winter (0.5 C)','shoulder (clamped 7 C)','summer (clamped 7 C)'};
+    styles = {'-','--',':'};
+    for q = 1:2   % shoulder and summer share the clamped curve; draw it once
+        hpq = heatpump_curve(pH, ambs(q));
+        plot(uu, hpq.copRated*pH.HeatPump.partLoad_func(max(uu,1e-12)), styles{q}, ...
+             'LineWidth',1.8, 'DisplayName',[labs{q} ' true']); hold on;
+        ub = hpq.bkpt.x/pH.HeatPump.Pmax; cb = hpq.bkpt.y ./ max(hpq.bkpt.x, eps);
+        plot(ub(2:end), cb(2:end), 'o--', 'LineWidth',1.1, 'MarkerSize',4, ...
+             'DisplayName',[labs{q} ' PWL']);
+    end
+    % Mark the non-monotonicity: segment 2's slope exceeds segment 1's, which
+    % is exactly why the fill-order binaries are mandatory.
+    hpS = heatpump_curve(pH, 7.0);
+    if hpS.needsBinaries
+        xm = (hpS.bkpt.x(2)+hpS.bkpt.x(3))/2 / pH.HeatPump.Pmax;
+        ym = hpS.slopes(2);
+        plot(xm, ym, 'rv', 'MarkerSize',11, 'MarkerFaceColor','r', ...
+             'DisplayName','seg-2 slope > seg-1 (binaries required)');
+        text(xm+0.02, ym, sprintf('slope_2=%.2f > slope_1=%.2f', hpS.slopes(2), hpS.slopes(1)));
+    end
+    hold off; grid on; xlabel('Load fraction u'); ylabel('COP');
+    title('Heat pump: COP curves and PWL approximation'); legend('Location','southeast');
+catch plot_err
+    fprintf('\n[efficiency-curve figure skipped: %s]\n', plot_err.message);
+end

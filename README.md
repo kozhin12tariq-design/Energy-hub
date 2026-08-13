@@ -356,6 +356,20 @@ octave --no-gui --eval "mc_aggregate('month4e')"
 Run without `MC_CHUNK` for the original single-process behaviour, which is
 unchanged. Size chunks by **~46.5 MB × draws/chunk × configs/draw**.
 
+## Figures each script produces
+
+| Script | Figures |
+|---|---|
+| `main_month2a` | efficiency curves (fuel cell η_e/η_th, heat-pump COP) with their PWL overlay and breakpoints; the seg-2 > seg-1 slope marked, which is why fill-order binaries are mandatory |
+| `main_month2b` | bus voltage profile |
+| `main_month3` | 3-panel dispatch across the three timescales; **24-hour device deployment** (mirrored source/sink stacks = the energy balance shown, plus all four storage SOCs) |
+| `main_month4a` | case comparison bars (cost, CO2, peak, unmet) |
+| `main_month4c` | curve-fit error and solve time vs segment count |
+| `main_month4g` | bus-voltage heatmap **and** the difference-from-no-hub heatmap on a diverging scale |
+
+All figures display only — no `print()`, no `saveas()`, and every one is wrapped
+in `try ... catch` so headless runs degrade gracefully.
+
 ## Assessment covers all four thesis criteria
 
 The brief requires assessment on **operational cost, carbon reduction, system

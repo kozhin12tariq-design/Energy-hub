@@ -360,6 +360,14 @@ fprintf('%-26s %12.1f %12.1f %12.1f\n', 'Feeder efficiency (%)', ...
 fprintf('%-26s %12.3f %12.3f %12.3f\n', 'Balance residual (kWh)', ...
     seaEff{1}.balanceResidual_kWh, seaEff{2}.balanceResidual_kWh, seaEff{3}.balanceResidual_kWh);
 
+fprintf(['\nA NOTE ON THE DEPLOYMENT FIGURE, so a zero-height band is not read as a bug.\n' ...
+    'On the shoulder day at the shipped hydrogen price the fuel cell does not run at\n' ...
+    'all (%.1f kWh of fuel), so its band in the source stack is flat at zero. That is\n' ...
+    'the correct dispatch: at this price the winter heat balance is the only thing that\n' ...
+    'forces the fuel cell on, and a shoulder day has no winter heat balance. Switching\n' ...
+    'season to get a fuller-looking picture would misrepresent the shipped default.\n'], ...
+    sum(res.PH2_5)/12);
+
 fprintf(['\nEFFICIENCY DOES NOT PEAK IN WINTER, AND THE EXPECTED MECHANISM IS WRONG.\n' ...
     'The intuition was that hub efficiency should be highest when the fuel cell''s\n' ...
     'byproduct heat is fully used -- which is winter, where this codebase has already\n' ...
@@ -608,6 +616,50 @@ try
     bar(tHours, res.RT_imbalance);
     ylabel('kW'); xlabel('Hour of day'); grid on;
     title('Real-time correction magnitude (deviation of actual grid flow from intraday commitment)');
+
+
+    % ================= FIGURE: 24-hour deployment of every hub device ======
+    % DISPLAY ONLY -- reads the completed dispatch, computes nothing new.
+    % Panel 1 shows the electrical balance as mirrored stacks: sources above
+    % zero, sinks below. The two stacks mirroring each other IS the energy
+    % balance, shown rather than asserted.
+    figure('Position',[140 140 1150 850]);
+
+    subplot(2,1,1);
+    % Fuel-cell electricity through the TRUE continuous curve, the same
+    % convention hub_efficiency.m uses -- what the machine actually produced.
+    uFCp   = max(res.PH2_5(:),0) / p.PWL.FC_H2_max;
+    fcElec = p.PWL.eta_FC_e_func(max(uFCp,1e-12)) .* max(res.PH2_5(:),0);
+    % Battery power from its own SOC trajectory (+ discharge, - charge).
+    dSOC   = [0; diff(res.SOCbatt5(:))] * p.Batt.Emax * 12;   % kW
+    bDis   = max(-dSOC,0); bCh = max(dSOC,0);
+    srcs = [max(res.Pg_imp5(:),0), p.eta_PV*max(res.Ps5(:),0), fcElec, bDis];
+    snks = [fc.RT.Lelec(:), max(res.Php5(:),0), bCh, max(res.Pg_exp5(:),0)];
+    hS = area(tHours, srcs);  hold on;
+    hK = area(tHours, -snks);
+    cS = {[0.85 0.33 0.10],[0.93 0.69 0.13],[0.47 0.67 0.19],[0.00 0.45 0.74]};
+    cK = {[0.30 0.30 0.30],[0.49 0.18 0.56],[0.00 0.45 0.74],[0.64 0.08 0.18]};
+    for q=1:numel(hS); set(hS(q),'FaceColor',cS{q}); end
+    for q=1:numel(hK); set(hK(q),'FaceColor',cK{q}); end
+    plot(tHours, zeros(size(tHours)), 'k-', 'LineWidth', 1);
+    hold off; grid on;
+    xlabel('Hour of day'); ylabel('Power (kW)');
+    title('Electrical balance: sources above zero, sinks below (the two mirror -- that is conservation)');
+    legend([hS hK], {'Grid import','PV used (AC)','Fuel cell elec','Battery discharge', ...
+        'Electrical load','Heat pump','Battery charge','Grid export'}, ...
+        'Location','eastoutside');
+
+    subplot(2,1,2);
+    tID = (1:96)/4;
+    plot(tHours, res.SOCbatt5, '-', 'LineWidth',1.4, 'Color',[0.00 0.45 0.74], ...
+         'DisplayName','Battery'); hold on;
+    plot(tID, res.ID_SOC.EV,       '-', 'LineWidth',1.4, 'Color',[0.47 0.67 0.19], 'DisplayName','EV fleet');
+    plot(tID, res.ID_SOC.Building, '-', 'LineWidth',1.4, 'Color',[0.85 0.33 0.10], 'DisplayName','Building thermal');
+    plot(tID, res.ID_SOC.Pipe,     '-', 'LineWidth',1.4, 'Color',[0.49 0.18 0.56], 'DisplayName','Pipe thermal');
+    hold off; grid on; ylim([0 1]);
+    xlabel('Hour of day'); ylabel('State of charge (0-1)');
+    title('All four storage devices');
+    legend('Location','eastoutside');
 
 catch plot_err
     fprintf('\n[plots skipped: %s]\n', plot_err.message);
