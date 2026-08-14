@@ -403,6 +403,35 @@ fprintf(['\nCurve-fit error (Max/RMSE, kW) falls monotonically as segment count 
 
 %% Plot
 try
+    % Shared annotation: the shipped default and the practical band that
+    % VALIDATION.md concludes from this very sweep ("n = 10 to n = 36").
+    % Drawn on all four panels so a reader sees at once where the chosen
+    % count sits relative to the evidence that justifies it.
+    nDef = 10; bandLo = 10; bandHi = 36;
+    function mark_default(xIsIndex, segCounts, nDef, bandLo, bandHi)
+        yl = ylim();
+        if xIsIndex
+            xd  = find(segCounts == nDef, 1);
+            xlo = find(segCounts == bandLo, 1); xhi = find(segCounts == bandHi, 1);
+        else
+            xd = nDef; xlo = bandLo; xhi = bandHi;
+        end
+        if isempty(xd) || isempty(xlo) || isempty(xhi); return; end
+        hold on;
+        % Drawn without uistack, which is absent in some Octave builds and
+        % silently sent this whole figure into its catch block. A translucent
+        % band over the existing lines reads the same and needs no restacking.
+        patch([xlo xhi xhi xlo], [yl(1) yl(1) yl(2) yl(2)], [0.85 0.92 0.98], ...
+              'EdgeColor','none', 'FaceAlpha', 0.25, 'HandleVisibility','off');
+        plot([xd xd], yl, 'r--', 'LineWidth', 1.6, 'HandleVisibility','off');
+        text(xd, yl(2), sprintf(' n=%d (shipped)', nDef), 'Color','r', ...
+             'VerticalAlignment','top', 'FontSize', 8);
+        text((xlo+xhi)/2, yl(1), sprintf('practical band n=%d-%d ', bandLo, bandHi), ...
+             'HorizontalAlignment','center', 'VerticalAlignment','bottom', 'FontSize', 8);
+        ylim(yl);
+        hold off;
+    end
+
     figure('Position',[100 100 1000 700]);
 
     subplot(2,2,1);
@@ -410,23 +439,39 @@ try
     semilogy(segCounts, maxErrT, '-s', 'DisplayName','Thermal'); grid on;
     xlabel('nSegments'); ylabel('Max curve-fit error (kW)'); legend('Location','northeast');
     title('PWL approximation error vs. segment count');
+    mark_default(false, segCounts, nDef, bandLo, bandHi);
 
     subplot(2,2,2);
     plot(segCounts, solveTime, '-o'); grid on;
     xlabel('nSegments'); ylabel('Mean MILP solve time (s)');
     title('Day-ahead MILP solve time vs. segment count');
+    mark_default(false, segCounts, nDef, bandLo, bandHi);
 
     subplot(2,2,3);
     plot(segCounts, plannedCost, '-o', 'DisplayName','Planned'); hold on;
     plot(segCounts, realizedCost, '-s', 'DisplayName','Realized'); grid on;
     xlabel('nSegments'); ylabel('Cost ($/day)'); legend('Location','northeast');
     title('Planned vs. realized day-ahead cost');
+    mark_default(false, segCounts, nDef, bandLo, bandHi);
 
     subplot(2,2,4);
     bar(100*(realizedCost-plannedCost)./abs(plannedCost));
     set(gca,'XTickLabel',arrayfun(@num2str,segCounts,'UniformOutput',false));
     xlabel('nSegments'); ylabel('Gap (%)'); grid on;
     title('Realized-vs-planned cost gap vs. segment count');
+    mark_default(true, segCounts, nDef, bandLo, bandHi);
+    % The n=2 anomaly, annotated from the LIVE sweep values rather than from a
+    % remembered constant: every curve-fit metric improves from n=1 to n=2 and
+    % the realized-cost gap gets WORSE, purely because the modelling error
+    % flips from pessimistic to optimistic.
+    gapsPct = 100*(realizedCost-plannedCost)./abs(plannedCost);
+    i2p = find(segCounts == 2, 1); i1p = find(segCounts == 1, 1);
+    if ~isempty(i2p) && ~isempty(i1p)
+        hold on;
+        text(i2p, gapsPct(i2p), sprintf('  n=2: %+.2f%%\n  worse than n=1 (%+.2f%%)\n  optimistic chord', ...
+             gapsPct(i2p), gapsPct(i1p)), 'FontSize', 8, 'VerticalAlignment','bottom');
+        hold off;
+    end
 catch plot_err
     fprintf('\n[plots skipped: %s]\n', plot_err.message);
 end

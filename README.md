@@ -364,7 +364,7 @@ unchanged. Size chunks by **~46.5 MB × draws/chunk × configs/draw**.
 | `main_month2b` | bus voltage profile; **IEEE 33 single-line diagram** (no-hub base case, node colour = voltage, line width = branch flow, hub bus marked) |
 | `main_month3` | 3-panel dispatch across the three timescales; **24-hour device deployment**; **electrical + thermal energy-flow accounting** (storage self-discharge called out as the largest first-law loss); **seasonal comparison** (cost, CO2, fuel, heat demand on separate axes) (mirrored source/sink stacks = the energy balance shown, plus all four storage SOCs) |
 | `main_month4a` | case comparison bars (cost, CO2, peak, unmet) |
-| `main_month4c` | curve-fit error and solve time vs segment count |
+| `main_month4c` | curve-fit error, solve time, planned-vs-realized cost, and the cost gap vs segment count -- all four panels mark **n = 10 (shipped)** and shade the **practical band n = 10-36**, with the n = 2 anomaly annotated from live sweep values |
 | `main_month4i` | **LP-vs-MILP segment fill** at the worst violating hour, per season -- the correctness argument for the fill-order binaries |
 | `main_month4k` | **Monte Carlo results with 95% CIs** -- resolved bars solid, unresolved hollow. **Reads `mc_chunks/`; run the chunked Monte Carlo first (`run_chunked.sh`). It never runs a simulation and never writes a chunk.** |
 | `main_month4g` | bus-voltage heatmap **and** the difference-from-no-hub heatmap on a diverging scale |
