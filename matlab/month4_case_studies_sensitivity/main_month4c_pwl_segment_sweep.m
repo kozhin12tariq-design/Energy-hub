@@ -424,10 +424,21 @@ try
         patch([xlo xhi xhi xlo], [yl(1) yl(1) yl(2) yl(2)], [0.85 0.92 0.98], ...
               'EdgeColor','none', 'FaceAlpha', 0.25, 'HandleVisibility','off');
         plot([xd xd], yl, 'r--', 'LineWidth', 1.6, 'HandleVisibility','off');
-        text(xd, yl(2), sprintf(' n=%d (shipped)', nDef), 'Color','r', ...
-             'VerticalAlignment','top', 'FontSize', 8);
-        text((xlo+xhi)/2, yl(1), sprintf('practical band n=%d-%d ', bandLo, bandHi), ...
-             'HorizontalAlignment','center', 'VerticalAlignment','bottom', 'FontSize', 8);
+        % Labels placed INSIDE the axes and away from the frame: the first
+        % version put the band caption at the bottom-left corner, nowhere near
+        % the band it described, and the n=10 label on top of the axis line.
+        % Positions are interpolated in the axis's OWN scale. On the log panel
+        % a linear fraction of (max-min) lands both labels against the top
+        % frame, where they overprinted each other.
+        if strcmp(get(gca,'YScale'), 'log')
+            yat = @(fr) 10.^(log10(yl(1)) + fr*(log10(yl(2)) - log10(yl(1))));
+        else
+            yat = @(fr) yl(1) + fr*(yl(2) - yl(1));
+        end
+        text(xd, yat(0.94), sprintf(' n=%d (shipped)', nDef), 'Color','r', ...
+             'VerticalAlignment','top', 'HorizontalAlignment','left', 'FontSize', 8);
+        text((xlo+xhi)/2, yat(0.80), sprintf('practical band n=%d-%d', bandLo, bandHi), ...
+             'HorizontalAlignment','center', 'VerticalAlignment','top', 'FontSize', 8);
         ylim(yl);
         hold off;
     end
@@ -459,6 +470,10 @@ try
     set(gca,'XTickLabel',arrayfun(@num2str,segCounts,'UniformOutput',false));
     xlabel('nSegments'); ylabel('Gap (%)'); grid on;
     title('Realized-vs-planned cost gap vs. segment count');
+    % PANEL 4 IS CATEGORICAL. bar() places bars at 1..10 and the tick LABELS
+    % carry the segment counts, so drawing the marker at data coordinate 10
+    % put it on the tenth BAR (n=150) instead of on n=10. mark_default is
+    % called with xIsIndex=true so it maps through find(segCounts==...).
     mark_default(true, segCounts, nDef, bandLo, bandHi);
     % The n=2 anomaly, annotated from the LIVE sweep values rather than from a
     % remembered constant: every curve-fit metric improves from n=1 to n=2 and
@@ -468,8 +483,30 @@ try
     i2p = find(segCounts == 2, 1); i1p = find(segCounts == 1, 1);
     if ~isempty(i2p) && ~isempty(i1p)
         hold on;
-        text(i2p, gapsPct(i2p), sprintf('  n=2: %+.2f%%\n  worse than n=1 (%+.2f%%)\n  optimistic chord', ...
-             gapsPct(i2p), gapsPct(i1p)), 'FontSize', 8, 'VerticalAlignment','bottom');
+        % Placed to the RIGHT of the n=2 bar with a leader line. The first
+        % version anchored the text at the bar itself, where it collided with
+        % the y-axis and was unreadable.
+        % Anchored well clear of both the bar and the right-hand frame, with a
+        % short leader. Earlier placements collided with the y-axis, then ran
+        % off the right edge; the text is now shorter and left-anchored at a
+        % slot with empty space above it.
+        % Parked in the empty upper-right of the panel with a leader back to
+        % the n=2 bar. Two earlier placements -- at the bar, then just beside
+        % it -- collided with the y-axis and then with the bars themselves.
+        yl4 = ylim(); yr4 = yl4(2) - yl4(1);
+        ylim([yl4(1), yl4(2) + 0.55*yr4]);
+        yl4 = ylim();
+        tx = numel(segCounts) * 0.55; ty = yl4(2) - 0.06*(yl4(2)-yl4(1));
+        plot([i2p tx], [gapsPct(i2p) ty], 'k-', 'LineWidth', 0.7, 'HandleVisibility','off');
+        % SINGLE-LINE text: the gnuplot backend places multi-line text at the
+        % axes origin rather than at the requested coordinates, so a three-line
+        % caption rendered on top of the bars. Two shorter lines are issued as
+        % two separate text() calls instead, which the backend does honour.
+        text(tx, ty, sprintf(' n=2 (%+.2f%%) is WORSE than n=1 (%+.2f%%)', ...
+             gapsPct(i2p), gapsPct(i1p)), 'FontSize', 8, ...
+             'VerticalAlignment','top', 'HorizontalAlignment','left');
+        text(tx, ty - 0.075*(yl4(2)-yl4(1)), ' despite the better fit: the chord turns OPTIMISTIC', ...
+             'FontSize', 8, 'VerticalAlignment','top', 'HorizontalAlignment','left');
         hold off;
     end
 catch plot_err

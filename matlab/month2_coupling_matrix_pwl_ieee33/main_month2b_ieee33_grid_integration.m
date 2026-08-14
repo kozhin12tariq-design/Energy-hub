@@ -235,7 +235,21 @@ try
         i1 = branches(b).From; i2 = branches(b).To;
         plot(xy([i1 i2],1), xy([i1 i2],2), '-', 'Color',[0.45 0.45 0.45], 'LineWidth', lw(b));
     end
-    scatter(xy(:,1), xy(:,2), 170, Vmag_base(:), 'filled', 'MarkerEdgeColor','k');
+    % NODE COLOURS DRAWN EXPLICITLY, not via scatter's colour-data argument.
+    % Under Octave's gnuplot backend scatter(...,C,'filled') does NOT map C
+    % through the colormap -- every node rendered solid black while the
+    % colourbar still advertised a 0.92-1.0 scale. That is worse than no
+    % figure, because a reader assumes the scale means something. Each bus is
+    % therefore mapped to an RGB triple and plotted with MarkerFaceColor.
+    cmap = colormap();
+    vlo = min(Vmag_base); vhi = max(Vmag_base);
+    for bq = 1:numel(Vmag_base)
+        ci = 1 + round((size(cmap,1)-1) * (Vmag_base(bq)-vlo) / max(vhi-vlo, eps));
+        ci = min(max(ci,1), size(cmap,1));
+        plot(xy(bq,1), xy(bq,2), 'o', 'MarkerSize', 11, ...
+             'MarkerFaceColor', cmap(ci,:), 'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
+    end
+    caxis([vlo vhi]);           % colourbar scale matches what is drawn
     cb = colorbar; ylabel(cb, 'Base-case voltage (pu)');
     for i = 1:33
         text(xy(i,1), xy(i,2)+0.30, sprintf('%d', i), 'HorizontalAlignment','center', 'FontSize', 8);

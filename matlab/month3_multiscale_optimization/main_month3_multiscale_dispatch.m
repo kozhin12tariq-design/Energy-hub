@@ -623,9 +623,12 @@ try
     % Panel 1 shows the electrical balance as mirrored stacks: sources above
     % zero, sinks below. The two stacks mirroring each other IS the energy
     % balance, shown rather than asserted.
-    figure('Position',[140 140 1150 850]);
+    figure('Position',[140 140 1150 980]);
 
-    subplot(2,1,1);
+    % EXPLICIT POSITIONS. With default subplot spacing panel 1's x tick
+    % labels ran into panel 2's title; a taller figure alone did not fix it
+    % because subplot divides the height proportionally.
+    subplot('Position',[0.08 0.60 0.66 0.34]);
     % Fuel-cell electricity through the TRUE continuous curve, the same
     % convention hub_efficiency.m uses -- what the machine actually produced.
     uFCp   = max(res.PH2_5(:),0) / p.PWL.FC_H2_max;
@@ -637,19 +640,31 @@ try
     snks = [fc.RT.Lelec(:), max(res.Php5(:),0), bCh, max(res.Pg_exp5(:),0)];
     hS = area(tHours, srcs);  hold on;
     hK = area(tHours, -snks);
-    cS = {[0.85 0.33 0.10],[0.93 0.69 0.13],[0.47 0.67 0.19],[0.00 0.45 0.74]};
-    cK = {[0.30 0.30 0.30],[0.49 0.18 0.56],[0.00 0.45 0.74],[0.64 0.08 0.18]};
+    % COLOURS: one hue per device, lightness by direction, so "which device"
+    % and "which way is it flowing" are both readable. The first version gave
+    % battery discharge and battery charge the SAME blue, which made the two
+    % bands indistinguishable in a plot whose whole point is reading bands.
+    cS = {[0.85 0.33 0.10], ...   % grid import   - dark orange
+          [0.93 0.69 0.13], ...   % PV (AC)       - gold
+          [0.47 0.67 0.19], ...   % fuel cell     - green
+          [0.00 0.45 0.74]};      % battery DIScharge - saturated blue
+    cK = {[0.35 0.35 0.35], ...   % electrical load   - dark grey
+          [0.49 0.18 0.56], ...   % heat pump         - purple
+          [0.55 0.75 0.95], ...   % battery CHARGE    - light tint of the same blue
+          [0.98 0.62 0.45]};      % grid export       - light tint of the import orange
     for q=1:numel(hS); set(hS(q),'FaceColor',cS{q}); end
     for q=1:numel(hK); set(hK(q),'FaceColor',cK{q}); end
     plot(tHours, zeros(size(tHours)), 'k-', 'LineWidth', 1);
     hold off; grid on;
-    xlabel('Hour of day'); ylabel('Power (kW)');
+    % Panel 1's xlabel is dropped: both panels share 'Hour of day' and the
+    % label was overprinting panel 2's title.
+    ylabel('Power (kW)');
     title('Electrical balance: sources above zero, sinks below (the two mirror -- that is conservation)');
     legend([hS hK], {'Grid import','PV used (AC)','Fuel cell elec','Battery discharge', ...
         'Electrical load','Heat pump','Battery charge','Grid export'}, ...
         'Location','eastoutside');
 
-    subplot(2,1,2);
+    subplot('Position',[0.08 0.08 0.66 0.36]);
     tID = (1:96)/4;
     plot(tHours, res.SOCbatt5, '-', 'LineWidth',1.4, 'Color',[0.00 0.45 0.74], ...
          'DisplayName','Battery'); hold on;
@@ -681,21 +696,23 @@ try
             (res.SOC0.Pipe     - res.SOCend.Pipe)    *p.Pipe.Emax;
     eHPh3 = eff3.heatSupplied_kWh - eFCh3;   % heat-pump thermal output
 
-    figure('Position',[180 180 1150 620]);
+    figure('Position',[180 180 1150 900]);
 
-    subplot(2,1,1);
+    subplot('Position',[0.08 0.58 0.62 0.34]);
     inE  = [eImp3, ePVac, eFCe3, max(eStoE,0)];
     outE = [eLe3, eHPe3, max(-eStoE,0), eExp3];
     barh([1 2], [inE, 0 0 0 0; 0 0 0 0, outE], 'stacked');
     set(gca,'YTick',[1 2],'YTickLabel',{'IN','OUT'});
-    xlabel('Energy (kWh/day)'); grid on;
+    % Panel 1's xlabel is dropped: both panels are in kWh/day and it was
+    % overprinting panel 2's title, which carries the self-discharge figure.
+    grid on;
     title(sprintf('Electrical energy flow, shipped default day (in %.0f kWh, out %.0f kWh)', ...
           sum(inE), sum(outE)));
     legend({'Grid import','PV (AC)','Fuel cell elec','Storage discharge', ...
             'Electrical load','Heat pump','Storage charge','Grid export'}, ...
             'Location','eastoutside');
 
-    subplot(2,1,2);
+    subplot('Position',[0.08 0.08 0.62 0.34]);
     inT  = [eHPh3, eFCh3, max(eStoT,0)];
     % Self-discharge is called out explicitly: it is the LARGEST single
     % first-law loss in this hub and the mechanism behind the conventional
